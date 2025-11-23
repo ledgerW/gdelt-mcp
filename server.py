@@ -124,54 +124,6 @@ def get_cloudvision_schema_resource() -> str:
 
 
 # ============================================================================
-# SCHEMA TOOLS - Get schema information for tables
-# ============================================================================
-
-@mcp.tool()
-def get_events_schema() -> Dict[str, Any]:
-    """
-    Get the complete schema for the GDELT Events table.
-    
-    Returns:
-        Dictionary containing table name, description, fields, and sample queries
-    """
-    return get_table_schema("events")
-
-
-@mcp.tool()
-def get_eventmentions_schema() -> Dict[str, Any]:
-    """
-    Get the complete schema for the GDELT EventMentions table.
-    
-    Returns:
-        Dictionary containing table name, description, fields, and sample queries
-    """
-    return get_table_schema("eventmentions")
-
-
-@mcp.tool()
-def get_gkg_schema() -> Dict[str, Any]:
-    """
-    Get the complete schema for the GDELT GKG (Global Knowledge Graph) table.
-    
-    Returns:
-        Dictionary containing table name, description, fields, and sample queries
-    """
-    return get_table_schema("gkg")
-
-
-@mcp.tool()
-def get_cloudvision_schema() -> Dict[str, Any]:
-    """
-    Get the complete schema for the GDELT CloudVision table.
-    
-    Returns:
-        Dictionary containing table name, description, fields, and sample queries
-    """
-    return get_table_schema("cloudvision")
-
-
-# ============================================================================
 # QUERY TOOLS - Execute queries on GDELT tables
 # ============================================================================
 

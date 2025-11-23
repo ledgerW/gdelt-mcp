@@ -14,10 +14,9 @@ This MCP server exposes four GDELT 2.0 tables along with CAMEO taxonomy lookups 
 ## Features
 
 - ✅ **4 MCP Resources**: Schema documentation for each table
-- ✅ **8 Query Tools**: Execute SQL queries on all 4 tables + schema retrieval tools
-- ✅ **2 CAMEO Taxonomy Tools**: Access 300+ event codes and actor classifications
-- ✅ **BigQuery Integration**: Direct access to GDELT's BigQuery tables
-- ✅ **No Authentication Required**: Designed for cloud service integration
+- ✅ **6 Query Tools**: Execute SQL queries on all 4 tables + CAMEO taxonomy lookups
+- ✅ **BigQuery Integration**: Direct access to GDELT's partitioned BigQuery tables
+- ✅ **Minimal Configuration**: Only 3 environment variables needed
 
 ## Prerequisites
 
@@ -157,13 +156,6 @@ query_gkg(
 
 #### `query_cloudvision`
 Query visual analysis data from images.
-
-### Schema Tools
-
-- `get_events_schema()` - Returns complete Events table schema
-- `get_eventmentions_schema()` - Returns EventMentions table schema
-- `get_gkg_schema()` - Returns GKG table schema
-- `get_cloudvision_schema()` - Returns CloudVision table schema
 
 ### CAMEO Taxonomy Tools
 

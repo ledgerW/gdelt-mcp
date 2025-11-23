@@ -14,10 +14,10 @@ class GDELTBigQueryClient:
     """Client for querying GDELT 2.0 tables in BigQuery."""
     
     # GDELT 2.0 table names
-    EVENTS_TABLE = "gdelt-bq.gdeltv2.events"
-    EVENTMENTIONS_TABLE = "gdelt-bq.gdeltv2.eventmentions"
-    GKG_TABLE = "gdelt-bq.gdeltv2.gkg"
-    CLOUDVISION_TABLE = "gdelt-bq.gdeltv2.cloudvision"
+    EVENTS_TABLE = "gdelt-bq.gdeltv2.events_partitioned"
+    EVENTMENTIONS_TABLE = "gdelt-bq.gdeltv2.eventmentions_partitioned"
+    GKG_TABLE = "gdelt-bq.gdeltv2.gkg_partitioned"
+    CLOUDVISION_TABLE = "gdelt-bq.gdeltv2.cloudvision_partitioned"
     
     def __init__(self, credentials_path: Optional[str] = None, project_id: Optional[str] = None):
         """
