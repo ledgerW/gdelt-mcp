@@ -10,34 +10,7 @@ def estimate_query_cost_impl(
     where_clause: Optional[str] = None,
     select_fields: str = "*"
 ) -> Dict[str, Any]:
-    """
-    Estimate the cost of a query BEFORE executing it (dry-run, no actual query).
-    
-    Use this tool to:
-    - Check the cost of a query before running it
-    - Verify that your date filters are effective
-    - Avoid expensive accidents
-    - Get a warning if you're about to scan >1GB
-    
-    This performs a BigQuery dry-run that estimates bytes scanned without executing the query.
-    Always use this for exploratory queries on large tables (GKG, Mentions).
-    
-    Args:
-        credentials: Tuple of (project_id, private_key, client_email)
-        table: Table to query - "events", "eventmentions", "gkg", or "cloudvision"
-        where_clause: Optional WHERE clause (without WHERE keyword)
-        select_fields: Fields to select (default: all)
-    
-    Returns:
-        Dictionary with bytes_processed, gb_processed, and estimated_cost_usd
-    
-    Example:
-        estimate_query_cost(
-            table="gkg",
-            where_clause="Themes LIKE '%PROTEST%' AND DATE >= 20250101000000",
-            select_fields="Themes, V2Locations"
-        )
-    """
+    """Implementation for estimating query cost."""
     project_id, private_key, client_email = credentials
     
     try:
@@ -93,47 +66,7 @@ def create_materialized_subset_impl(
     description: Optional[str] = None,
     expiration_hours: int = 48
 ) -> Dict[str, Any]:
-    """
-    Create a materialized subset table from GDELT data with auto-expiration.
-    
-    🎯 RECOMMENDED WORKFLOW for cost-effective analysis:
-    1. Create subset once with tight date filters (this tool)
-    2. Query subset multiple times for near-free iteration (use query_materialized_subset)
-    3. Auto-cleanup after 48 hours (or manual delete)
-    
-    This is 50-100x cheaper than querying GDELT directly multiple times!
-    
-    Use this when you need to:
-    - Explore data iteratively (try different queries on same dataset)
-    - Perform multi-step analysis
-    - Share filtered data with team members
-    - Avoid repeated expensive queries
-    
-    ⚠️ IMPORTANT: Your where_clause MUST include date filters for cost-effectiveness:
-    - Events: SQLDATE >= YYYYMMDD
-    - GKG: DATE >= YYYYMMDDhhmmss
-    
-    Args:
-        credentials: Tuple of (project_id, private_key, client_email)
-        source_table: Source table - "events", "eventmentions", "gkg", or "cloudvision"
-        subset_name: Name for subset (alphanumeric and underscores only, e.g., "ukraine_jan2025")
-        where_clause: WHERE clause to filter data (MUST include date filters)
-        select_fields: Fields to select (default: all - but consider selecting only needed fields)
-        description: Optional description for documentation
-        expiration_hours: Hours until auto-deletion (default: 48, prevents forgotten tables)
-    
-    Returns:
-        Dictionary with creation status, cost estimate, rows created, and expiration info
-    
-    Example:
-        create_materialized_subset(
-            source_table="events",
-            subset_name="ukraine_conflict_jan2025",
-            where_clause="SQLDATE BETWEEN 20250101 AND 20250131 AND (Actor1CountryCode = 'UKR' OR Actor2CountryCode = 'UKR')",
-            select_fields="SQLDATE, Actor1Name, Actor2Name, EventCode, GoldsteinScale, ActionGeo_Lat, ActionGeo_Long",
-            description="Ukraine-related events for January 2025 analysis"
-        )
-    """
+    """Implementation for creating materialized subset."""
     project_id, private_key, client_email = credentials
     
     try:
@@ -177,40 +110,7 @@ def create_materialized_subset_impl(
 
 
 def list_materialized_subsets_impl(credentials: tuple) -> List[Dict[str, Any]]:
-    """
-    List all materialized subset tables in your project.
-    
-    Shows all subsets you've created with metadata including:
-    - Subset name and full table ID
-    - Creation and expiration timestamps
-    - Hours until expiration (or if already expired)
-    - Size in MB and row count
-    - Description
-    
-    Use this to:
-    - See what subsets you have available
-    - Check expiration status
-    - Monitor storage usage
-    - Find subsets that need extension or cleanup
-    
-    Args:
-        credentials: Tuple of (project_id, private_key, client_email)
-    
-    Returns:
-        List of dictionaries with subset metadata
-    
-    Example response:
-        [
-            {
-                "subset_name": "ukraine_jan2025",
-                "size_mb": 45.2,
-                "num_rows": 12543,
-                "expires_in_hours": 36.5,
-                "is_expired": false,
-                "description": "Ukraine events January 2025"
-            }
-        ]
-    """
+    """Implementation for listing materialized subsets."""
     project_id, private_key, client_email = credentials
     
     try:
@@ -237,42 +137,7 @@ def query_materialized_subset_impl(
     select_fields: str = "*",
     limit: int = 1000
 ) -> List[Dict[str, Any]]:
-    """
-    Query a materialized subset table (near-free operation!).
-    
-    This is the second step in the recommended cost-optimization workflow:
-    1. Create subset once → ~$0.001-0.01
-    2. Query subset many times → ~$0.00001 each (THIS TOOL)
-    
-    Benefits:
-    - ⚡ Fast: subset is much smaller than full GDELT
-    - 💰 Cheap: queries cost ~$0.00001 vs $0.01+ on full tables
-    - 🔄 Iterate: try different analyses without re-filtering
-    
-    Use this for:
-    - Iterative data exploration
-    - Multiple analyses on same filtered data
-    - Quick prototyping and testing
-    - Dashboard queries
-    
-    Args:
-        credentials: Tuple of (project_id, private_key, client_email)
-        subset_name: Name of the subset to query (from list_materialized_subsets)
-        where_clause: Optional additional WHERE clause for further filtering
-        select_fields: Fields to select (default: all)
-        limit: Maximum rows to return (default: 1000, max: 10000)
-    
-    Returns:
-        List of dictionaries representing query results
-    
-    Example:
-        query_materialized_subset(
-            subset_name="ukraine_jan2025",
-            where_clause="EventCode LIKE '19%'",  # Filter to military actions
-            select_fields="SQLDATE, EventCode, Actor1Name, Actor2Name",
-            limit=500
-        )
-    """
+    """Implementation for querying materialized subset."""
     project_id, private_key, client_email = credentials
     
     try:
@@ -306,31 +171,7 @@ def extend_subset_expiration_impl(
     subset_name: str,
     additional_hours: int = 48
 ) -> Dict[str, Any]:
-    """
-    Extend the expiration time of a materialized subset.
-    
-    By default, subsets auto-expire after 48 hours to prevent forgotten tables from
-    accumulating storage costs. Use this tool to keep a subset longer if needed.
-    
-    Use this when:
-    - Analysis is taking longer than expected
-    - You want to share subset with team members
-    - Long-running project needs persistent data
-    
-    Args:
-        credentials: Tuple of (project_id, private_key, client_email)
-        subset_name: Name of the subset to extend
-        additional_hours: Hours to add to expiration (default: 48)
-    
-    Returns:
-        Dictionary with update status and new expiration time
-    
-    Example:
-        extend_subset_expiration(
-            subset_name="ukraine_jan2025",
-            additional_hours=72  # Extend by 3 more days
-        )
-    """
+    """Implementation for extending subset expiration."""
     project_id, private_key, client_email = credentials
     
     try:
@@ -356,27 +197,7 @@ def extend_subset_expiration_impl(
 
 
 def delete_materialized_subset_impl(credentials: tuple, subset_name: str) -> Dict[str, Any]:
-    """
-    Delete a materialized subset table (manual cleanup).
-    
-    Subsets auto-expire after 48 hours by default, but you can manually delete them
-    earlier to clean up storage and avoid costs.
-    
-    Use this when:
-    - Analysis is complete and subset no longer needed
-    - Want to free up storage quota
-    - Need to recreate subset with different parameters
-    
-    Args:
-        credentials: Tuple of (project_id, private_key, client_email)
-        subset_name: Name of the subset to delete
-    
-    Returns:
-        Dictionary with deletion status
-    
-    Example:
-        delete_materialized_subset(subset_name="ukraine_jan2025")
-    """
+    """Implementation for deleting materialized subset."""
     project_id, private_key, client_email = credentials
     
     try:
