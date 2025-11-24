@@ -30,15 +30,6 @@ mcp = FastMCP("GDELT 2.0")
 _bq_client: Optional[GDELTBigQueryClient] = None
 
 
-def get_bq_client() -> GDELTBigQueryClient:
-    """Get or create BigQuery client instance."""
-    global _bq_client
-    if _bq_client is None:
-        credentials_path = os.getenv("GOOGLE_APPLICATION_CREDENTIALS", "gcp_bq.json")
-        project_id = os.getenv("GCP_PROJECT_ID")
-        _bq_client = GDELTBigQueryClient(credentials_path=credentials_path, project_id=project_id)
-    return _bq_client
-
 
 def get_credentials_from_token() -> Optional[Tuple[str, str, str]]:
     """
