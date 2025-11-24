@@ -80,6 +80,47 @@ class GDELTBigQueryClient:
             # Attempt to use default credentials (e.g., from gcloud CLI)
             self.client = bigquery.Client(project=self.project_id)
     
+    def _extract_partition_filter(self, where_clause: str, table: str) -> Optional[str]:
+        """
+        Extract or generate _PARTITIONTIME filter from WHERE clause for partition pruning.
+        
+        Args:
+            where_clause: The WHERE clause to analyze
+            table: The table being queried
+            
+        Returns:
+            _PARTITIONTIME filter string or None
+        """
+        if not where_clause:
+            return None
+        
+        import re
+        
+        # For Events table: look for SQLDATE filters (format: YYYYMMDD)
+        if "events" in table:
+            # Match patterns like "SQLDATE >= 20240101" or "SQLDATE = 20240101"
+            match = re.search(r'SQLDATE\s*>=?\s*(\d{8})', where_clause, re.IGNORECASE)
+            if match:
+                date_str = match.group(1)
+                # Convert YYYYMMDD to YYYY-MM-DD
+                formatted_date = f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:8]}"
+                return f"_PARTITIONTIME >= '{formatted_date}'"
+        
+        # For GKG table: look for DATE filters (format: YYYYMMDDhhmmss)
+        elif "gkg" in table:
+            match = re.search(r'DATE\s*>=?\s*(\d{14})', where_clause, re.IGNORECASE)
+            if match:
+                date_str = match.group(1)
+                # Convert YYYYMMDDhhmmss to YYYY-MM-DD
+                formatted_date = f"{date_str[:4]}-{date_str[4:6]}-{date_str[6:8]}"
+                return f"_PARTITIONTIME >= '{formatted_date}'"
+        
+        # Check if _PARTITIONTIME is already in the WHERE clause
+        if "_PARTITIONTIME" in where_clause.upper():
+            return None  # Already has partition filter
+        
+        return None
+    
     def query(
         self,
         table: str,
@@ -89,7 +130,10 @@ class GDELTBigQueryClient:
         timeout: int = 300
     ) -> List[Dict[str, Any]]:
         """
-        Execute a query on a GDELT table.
+        Execute a query on a GDELT table with automatic partition pruning.
+        
+        Automatically adds _PARTITIONTIME filters when date fields are detected
+        to leverage BigQuery's partition pruning for faster and cheaper queries.
         
         Args:
             table: Table name (one of the class constants)
@@ -104,8 +148,16 @@ class GDELTBigQueryClient:
         # Build the query
         query = f"SELECT {select_fields} FROM `{table}`"
         
+        # Add WHERE clause with automatic partition pruning
         if where_clause:
-            query += f" WHERE {where_clause}"
+            # Try to extract/generate partition filter for optimization
+            partition_filter = self._extract_partition_filter(where_clause, table)
+            
+            if partition_filter:
+                # Add partition filter first for optimal pruning, then original where clause
+                query += f" WHERE {partition_filter} AND ({where_clause})"
+            else:
+                query += f" WHERE {where_clause}"
         
         query += f" LIMIT {limit}"
         

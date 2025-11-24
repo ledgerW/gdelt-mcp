@@ -171,6 +171,9 @@ def query_events(
 
     ! This table is very large - ALWAYS use a WHERE clause !
     
+    PERFORMANCE OPTIMIZATION: Queries automatically use partition pruning when you include SQLDATE filters
+    (e.g., "SQLDATE >= 20240101"). Always include date filters to make queries faster and cheaper.
+    
     Args:
         where_clause: SQL WHERE clause without the WHERE keyword (e.g., "Actor1CountryCode = 'USA'")
         select_fields: Comma-separated list of fields to select (default: all fields)
@@ -315,6 +318,9 @@ def query_gkg(
     and entity extraction from global news.
 
     ! This table is very large - ALWAYS use a WHERE clause !
+    
+    PERFORMANCE OPTIMIZATION: Queries automatically use partition pruning when you include DATE filters
+    (e.g., "DATE >= 20240101000000"). Always include date filters to make queries faster and cheaper.
     
     Args:
         where_clause: SQL WHERE clause without the WHERE keyword
