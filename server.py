@@ -1,23 +1,34 @@
 """GDELT 2.0 MCP Server - Provides access to GDELT BigQuery tables and CAMEO taxonomies."""
 
 import os
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Annotated, Literal
 from dotenv import load_dotenv
 from fastmcp import FastMCP
-from fastmcp.server.dependencies import get_http_headers
+from pydantic import Field
 
-from bigquery_client import GDELTBigQueryClient
-from schema_docs import get_table_schema, get_all_schemas, get_sample_queries
-from cameo_lookups import (
-    CAMEO_EVENT_CODES,
-    CAMEO_COUNTRY_CODES,
-    CAMEO_TYPE_CODES,
-    get_event_code_description,
-    get_country_name,
-    get_actor_type_description,
-    search_event_codes,
-    get_event_codes_by_category,
-    get_all_cameo_data,
+from utils.auth import get_credentials_from_token, get_credentials_from_env
+from resources import (
+    get_events_schema_resource_impl,
+    get_eventmentions_schema_resource_impl,
+    get_gkg_schema_resource_impl,
+    get_cloudvision_schema_resource_impl,
+    get_usage_guide_impl,
+)
+from tools.query_tools import (
+    query_events_impl,
+    query_eventmentions_impl,
+    query_gkg_impl,
+    query_cloudvision_impl,
+)
+from tools.cost_optimization import (
+    estimate_query_cost_impl,
+    create_materialized_subset_impl,
+    list_materialized_subsets_impl,
+    query_materialized_subset_impl,
+)
+from tools.cameo_tools import (
+    get_cameo_event_codes_impl,
+    get_cameo_actor_codes_impl,
 )
 
 # Load environment variables
@@ -26,524 +37,373 @@ load_dotenv()
 # Initialize FastMCP server
 mcp = FastMCP("GDELT 2.0")
 
-# Initialize BigQuery client (will be lazy-loaded)
-_bq_client: Optional[GDELTBigQueryClient] = None
-
-
-
-def get_credentials_from_token() -> Optional[Tuple[str, str, str]]:
-    """
-    Extract and validate GCP credentials from Bearer token.
-    
-    Token format: project_id|private_key|client_email
-    
-    Returns:
-        Tuple of (project_id, private_key, client_email) or None if invalid
-    """
-    headers = get_http_headers()
-    auth_header = headers.get("authorization", "")
-    
-    if not auth_header.startswith("Bearer "):
-        return None
-    
-    token = auth_header[7:]  # Remove "Bearer " prefix
-    parts = token.split("|")
-    
-    if len(parts) != 3:
-        return None
-    
-    project_id, private_key, client_email = parts
-    
-    # Basic validation
-    if not project_id or not private_key.startswith("-----BEGIN PRIVATE KEY-----") or "@" not in client_email:
-        return None
-    
-    return (project_id, private_key, client_email)
-
 
 # ============================================================================
-# RESOURCES - Provide access to table schemas and documentation
+# RESOURCES
 # ============================================================================
 
 @mcp.resource("gdelt://events/schema")
 def get_events_schema_resource() -> str:
     """Schema and documentation for the GDELT Events table."""
-    schema = get_table_schema("events")
-    return f"""# GDELT Events Table Schema
-
-**Table:** {schema['table_name']}
-
-**Description:** {schema['description']}
-
-## Fields
-
-{chr(10).join([f"- **{field['name']}** ({field['type']}): {field['description']}" for field in schema['fields']])}
-
-## Sample Queries
-
-{chr(10).join([f"### {q['description']}{chr(10)}```sql{chr(10)}{q['query']}{chr(10)}```{chr(10)}" for q in schema['sample_queries']])}
-"""
+    return get_events_schema_resource_impl()
 
 
 @mcp.resource("gdelt://eventmentions/schema")
 def get_eventmentions_schema_resource() -> str:
     """Schema and documentation for the GDELT EventMentions table."""
-    schema = get_table_schema("eventmentions")
-    return f"""# GDELT EventMentions Table Schema
-
-**Table:** {schema['table_name']}
-
-**Description:** {schema['description']}
-
-## Fields
-
-{chr(10).join([f"- **{field['name']}** ({field['type']}): {field['description']}" for field in schema['fields']])}
-
-## Sample Queries
-
-{chr(10).join([f"### {q['description']}{chr(10)}```sql{chr(10)}{q['query']}{chr(10)}```{chr(10)}" for q in schema['sample_queries']])}
-"""
+    return get_eventmentions_schema_resource_impl()
 
 
 @mcp.resource("gdelt://gkg/schema")
 def get_gkg_schema_resource() -> str:
     """Schema and documentation for the GDELT GKG (Global Knowledge Graph) table."""
-    schema = get_table_schema("gkg")
-    return f"""# GDELT GKG (Global Knowledge Graph) Table Schema
-
-**Table:** {schema['table_name']}
-
-**Description:** {schema['description']}
-
-## Fields
-
-{chr(10).join([f"- **{field['name']}** ({field['type']}): {field['description']}" for field in schema['fields']])}
-
-## Sample Queries
-
-{chr(10).join([f"### {q['description']}{chr(10)}```sql{chr(10)}{q['query']}{chr(10)}```{chr(10)}" for q in schema['sample_queries']])}
-"""
+    return get_gkg_schema_resource_impl()
 
 
 @mcp.resource("gdelt://cloudvision/schema")
 def get_cloudvision_schema_resource() -> str:
     """Schema and documentation for the GDELT CloudVision table."""
-    schema = get_table_schema("cloudvision")
-    return f"""# GDELT CloudVision Table Schema
+    return get_cloudvision_schema_resource_impl()
 
-**Table:** {schema['table_name']}
 
-**Description:** {schema['description']}
-
-## Fields
-
-{chr(10).join([f"- **{field['name']}** ({field['type']}): {field['description']}" for field in schema['fields']])}
-
-## Sample Queries
-
-{chr(10).join([f"### {q['description']}{chr(10)}```sql{chr(10)}{q['query']}{chr(10)}```{chr(10)}" for q in schema['sample_queries']])}
-"""
+@mcp.resource("gdelt://guide/usage")
+def get_usage_guide_resource() -> str:
+    """REQUIRED READING: GDELT BigQuery usage guide - cost-effective querying workflows."""
+    return get_usage_guide_impl()
 
 
 # ============================================================================
-# QUERY TOOLS - Execute queries on GDELT tables
+# RESOURCE FETCHING TOOLS
 # ============================================================================
 
-@mcp.tool()
+@mcp.tool(tags=["schema"])
+def get_events_schema() -> str:
+    """
+    Get the GDELT Events table schema documentation.
+    
+    Use this tool to understand the Events table structure, available fields, and sample queries
+    before querying event data.
+    
+    Returns:
+        Complete schema documentation for the Events table
+    """
+    return get_events_schema_resource_impl()
+
+
+@mcp.tool(tags=["schema"])
+def get_eventmentions_schema() -> str:
+    """
+    Get the GDELT EventMentions table schema documentation.
+    
+    Use this tool to understand the EventMentions table structure, available fields, and sample
+    queries before querying media mentions data.
+    
+    Returns:
+        Complete schema documentation for the EventMentions table
+    """
+    return get_eventmentions_schema_resource_impl()
+
+
+@mcp.tool(tags=["schema"])
+def get_gkg_schema() -> str:
+    """
+    Get the GDELT GKG (Global Knowledge Graph) table schema documentation.
+    
+    Use this tool to understand the GKG table structure, available fields, and sample queries
+    before querying semantic content, themes, and entities.
+    
+    Returns:
+        Complete schema documentation for the GKG table
+    """
+    return get_gkg_schema_resource_impl()
+
+
+@mcp.tool(tags=["schema"])
+def get_cloudvision_schema() -> str:
+    """
+    Get the GDELT CloudVision table schema documentation.
+    
+    Use this tool to understand the CloudVision table structure, available fields, and sample
+    queries before querying visual analysis data.
+    
+    Returns:
+        Complete schema documentation for the CloudVision table
+    """
+    return get_cloudvision_schema_resource_impl()
+
+
+@mcp.tool(tags=["guide"])
+def get_usage_guide() -> str:
+    """
+    ⚠️ REQUIRED READING BEFORE ANY GDELT QUERY ⚠️
+    
+    Get the comprehensive GDELT usage guide with the recommended workflow.
+    
+    READ THIS FIRST to avoid expensive queries and runaway costs. The GDELT dataset is MASSIVE
+    (terabytes on BigQuery). A single poorly-formed query can cost $1-50+. This guide presents
+    the ONE SAFE WORKFLOW that prevents surprise charges while enabling powerful analysis.
+    
+    The guide covers:
+    - The materialized-first workflow (DEFAULT approach - check existing subsets, create if needed)
+    - How to query cost-effectively (date filters, table selection, column selection)
+    - Table-specific guidance (Events, Mentions, GKG, CloudVision)
+    - Tool reference organized by workflow step
+    
+    Returns:
+        Complete usage guide with recommended workflow and cost-avoidance techniques
+    """
+    return get_usage_guide_impl()
+
+
+# ============================================================================
+# QUERY TOOLS
+# ============================================================================
+
+@mcp.tool(tags=["query"])
 def query_events(
-    where_clause: Optional[str] = None,
-    select_fields: str = "*",
-    limit: int = 100,
-    order_by: Optional[str] = None
+    where_clause: Annotated[Optional[str], Field(description='SQL WHERE clause without WHERE keyword. MUST include "SQLDATE >= YYYYMMDD"')] = None,
+    select_fields: Annotated[str, Field(description='Comma-separated field names')] = "*",
+    limit: Annotated[int, Field(description="Maximum rows to return (max: 10000)", ge=1, le=10000)] = 100,
+    order_by: Annotated[Optional[str], Field(description='ORDER BY clause without ORDER BY keyword (e.g., "SQLDATE DESC")')] = None
 ) -> List[Dict[str, Any]]:
     """
-    Query the GDELT Events table for structured event data about interactions between actors worldwide.
+    Query the GDELT Events table for structured event data.
     
-    Use this tool when you need to analyze:
-    - Global events and actions between countries, organizations, or individuals
-    - Who did what to whom (Actor1 -> Event -> Actor2 relationships)
-    - Event locations, dates, and geographic coordinates
-    - Event impact measures (Goldstein scale, number of mentions, sources, articles)
-    - Specific event types using CAMEO codes (e.g., military actions, protests, negotiations)
+    Use this tool to analyze global events and actor relationships. This is the SMALLEST GDELT
+    table - always query this first before EventMentions or GKG. Each row represents a unique
+    event with actors, action codes, and contextual information.
     
-    This is the primary table for event-level analysis. Each row represents a unique event with actors, 
-    action codes, and contextual information.
-
-    ! This table is very large - ALWAYS use a WHERE clause !
+    Use when you need: global events, who-did-what-to-whom relationships, event locations and dates,
+    impact measures (Goldstein scale), or specific event types via CAMEO codes.
     
-    PERFORMANCE OPTIMIZATION: Queries automatically use partition pruning when you include SQLDATE filters
-    (e.g., "SQLDATE >= 20240101"). Always include date filters to make queries faster and cheaper.
-    
-    Args:
-        where_clause: SQL WHERE clause without the WHERE keyword (e.g., "Actor1CountryCode = 'USA'")
-        select_fields: Comma-separated list of fields to select (default: all fields)
-        limit: Maximum number of rows to return (default: 100, max: 10000)
-        order_by: ORDER BY clause without the ORDER BY keyword (e.g., "SQLDATE DESC")
-    
-    Returns:
-        List of dictionaries representing the query results
-    
-    Example:
-        query_events(where_clause="EventRootCode = '19' AND SQLDATE >= 20240101", limit=50)
+    ⚠️ COST: ~$0.0002-0.001 per day WITH date filters. WITHOUT date filters can scan 50GB+ → $0.25+
     """
-    # Get credentials from Bearer token
     credentials = get_credentials_from_token()
-    
     if not credentials:
-        return [{
-            "error": "Authentication required",
-            "message": "Please provide a valid Bearer token in the Authorization header",
-            "format": "project_id|private_key|client_email",
-            "instructions": "See README for instructions on obtaining and formatting your GCP credentials"
-        }]
-    
-    project_id, private_key, client_email = credentials
-    
-    try:
-        # Create client with user's credentials
-        client = GDELTBigQueryClient(
-            project_id=project_id,
-            private_key=private_key,
-            client_email=client_email
-        )
-        
-        limit = min(limit, 10000)  # Cap at 10000
-        
-        results = client.query(
-            table=client.EVENTS_TABLE,
-            where_clause=where_clause,
-            select_fields=select_fields,
-            limit=limit
-        )
-        
-        return results
-    except Exception as e:
-        return [{
-            "error": "Query failed",
-            "message": str(e),
-            "help": "Verify your GCP credentials have BigQuery access to gdelt-bq.gdeltv2 dataset"
-        }]
+        credentials = get_credentials_from_env()
+    if not credentials:
+        return [{"error": "Authentication required", "message": "Please provide a valid Bearer token or set GCP environment variables"}]
+    return query_events_impl(credentials, where_clause, select_fields, limit, order_by)
 
 
-@mcp.tool()
+@mcp.tool(tags=["query"])
 def query_eventmentions(
-    where_clause: Optional[str] = None,
-    select_fields: str = "*",
-    limit: int = 100
+    where_clause: Annotated[Optional[str], Field(description="SQL WHERE clause without WHERE keyword. Filter by GLOBALEVENTID from Events")] = None,
+    select_fields: Annotated[str, Field(description="Comma-separated field names")] = "*",
+    limit: Annotated[int, Field(description="Maximum rows to return (max: 10000)", ge=1, le=10000)] = 100
 ) -> List[Dict[str, Any]]:
     """
-    Query the GDELT EventMentions table for detailed source information about how events are mentioned in media.
+    Query the GDELT EventMentions table for media source information.
     
-    Use this tool when you need to:
-    - Find all news articles and sources that mention a specific event (by GLOBALEVENTID)
-    - Analyze media coverage and sentiment for events
-    - Track which news sources reported on an event
-    - Get confidence scores for event mentions
-    - Find URLs and document identifiers for event coverage
+    Use this tool to find news articles and sources that mention specific events, analyze media
+    coverage and sentiment, or track which news sources reported on an event. This table contains
+    one row for each time an event appears in media, linking back to Events via GLOBALEVENTID.
     
-    This table contains one row for each time an event appears in media, linking back to events via GLOBALEVENTID.
-    Use this after querying the Events table to drill into media mentions and sources.
-
-    ! This table is very large - ALWAYS use a WHERE clause !
+    Use when you need: article-level mentions of events, media coverage analysis, source URLs,
+    confidence scores, or to drill into specific event coverage after querying Events.
     
-    Args:
-        where_clause: SQL WHERE clause without the WHERE keyword
-        select_fields: Comma-separated list of fields to select (default: all fields)
-        limit: Maximum number of rows to return (default: 100, max: 10000)
-    
-    Returns:
-        List of dictionaries representing the query results
-    
-    Example:
-        query_eventmentions(where_clause="GLOBALEVENTID = 1234567890", limit=50)
+    ⚠️ COST: ~10x larger than Events. Query Events with date filters first, then filter by
+    GLOBALEVENTID here. Without filters can scan 10GB+ → $0.05+
     """
-    # Get credentials from Bearer token
     credentials = get_credentials_from_token()
-    
     if not credentials:
-        return [{
-            "error": "Authentication required",
-            "message": "Please provide a valid Bearer token in the Authorization header",
-            "format": "project_id|private_key|client_email",
-            "instructions": "See README for instructions on obtaining and formatting your GCP credentials"
-        }]
-    
-    project_id, private_key, client_email = credentials
-    
-    try:
-        # Create client with user's credentials
-        client = GDELTBigQueryClient(
-            project_id=project_id,
-            private_key=private_key,
-            client_email=client_email
-        )
-        
-        limit = min(limit, 10000)
-        
-        results = client.query(
-            table=client.EVENTMENTIONS_TABLE,
-            where_clause=where_clause,
-            select_fields=select_fields,
-            limit=limit
-        )
-        
-        return results
-    except Exception as e:
-        return [{
-            "error": "Query failed",
-            "message": str(e),
-            "help": "Verify your GCP credentials have BigQuery access to gdelt-bq.gdeltv2 dataset"
-        }]
+        credentials = get_credentials_from_env()
+    if not credentials:
+        return [{"error": "Authentication required", "message": "Please provide a valid Bearer token or set GCP environment variables"}]
+    return query_eventmentions_impl(credentials, where_clause, select_fields, limit)
 
 
-@mcp.tool()
+@mcp.tool(tags=["query"])
 def query_gkg(
-    where_clause: Optional[str] = None,
-    select_fields: str = "*",
-    limit: int = 100
+    where_clause: Annotated[Optional[str], Field(description='SQL WHERE clause without WHERE keyword. MUST include "DATE >= YYYYMMDDhhmmss"')] = None,
+    select_fields: Annotated[str, Field(description='Comma-separated field names (strongly recommend specific fields, not "*")')] = "*",
+    limit: Annotated[int, Field(description="Maximum rows to return (max: 10000)", ge=1, le=10000)] = 100
 ) -> List[Dict[str, Any]]:
     """
-    Query the GDELT GKG (Global Knowledge Graph) table for rich contextual information from news documents.
+    Query the GDELT GKG (Global Knowledge Graph) table for semantic content.
     
-    Use this tool when you need to analyze:
-    - Themes and topics in news coverage (PROTEST, ECONOMY, TERRORISM, etc.)
-    - Named entities: persons, organizations, and locations mentioned in articles
-    - Geographic locations and coordinates from news content
-    - Emotional tone and sentiment of articles
-    - Counts and measures extracted from news text
-    - Source URLs and document metadata
+    Use this tool for deep semantic analysis of news content beyond just events. Each row represents
+    a processed news document with extracted themes, entities, locations, sentiment, and metadata.
+    This is 20x LARGER than Events - only use when Events/Mentions can't answer your question.
     
-    The GKG provides deeper semantic analysis of news content beyond just events. Each row represents 
-    a processed news document with extracted knowledge. Use this for topic analysis, sentiment tracking,
-    and entity extraction from global news.
-
-    ! This table is very large - ALWAYS use a WHERE clause !
+    Use when you need: themes and topics (PROTEST, ECONOMY, etc.), named entities (persons,
+    organizations, locations), geographic coordinates from content, emotional tone and sentiment,
+    or extracted counts and measures.
     
-    PERFORMANCE OPTIMIZATION: Queries automatically use partition pruning when you include DATE filters
-    (e.g., "DATE >= 20240101000000"). Always include date filters to make queries faster and cheaper.
-    
-    Args:
-        where_clause: SQL WHERE clause without the WHERE keyword
-        select_fields: Comma-separated list of fields to select (default: all fields)
-        limit: Maximum number of rows to return (default: 100, max: 10000)
-    
-    Returns:
-        List of dictionaries representing the query results
-    
-    Example:
-        query_gkg(where_clause="Themes LIKE '%PROTEST%' AND DATE >= 20240101000000", limit=50)
+    🚨 CRITICAL: GKG is the MOST EXPENSIVE table. WITH date filter ~$0.025/day. WITHOUT date
+    filter can scan 2.5TB+ → $12.50+. STRONGLY use materialization for analysis.
     """
-    # Get credentials from Bearer token
     credentials = get_credentials_from_token()
-    
     if not credentials:
-        return [{
-            "error": "Authentication required",
-            "message": "Please provide a valid Bearer token in the Authorization header",
-            "format": "project_id|private_key|client_email",
-            "instructions": "See README for instructions on obtaining and formatting your GCP credentials"
-        }]
-    
-    project_id, private_key, client_email = credentials
-    
-    try:
-        # Create client with user's credentials
-        client = GDELTBigQueryClient(
-            project_id=project_id,
-            private_key=private_key,
-            client_email=client_email
-        )
-        
-        limit = min(limit, 10000)
-        
-        results = client.query(
-            table=client.GKG_TABLE,
-            where_clause=where_clause,
-            select_fields=select_fields,
-            limit=limit
-        )
-        
-        return results
-    except Exception as e:
-        return [{
-            "error": "Query failed",
-            "message": str(e),
-            "help": "Verify your GCP credentials have BigQuery access to gdelt-bq.gdeltv2 dataset"
-        }]
+        credentials = get_credentials_from_env()
+    if not credentials:
+        return [{"error": "Authentication required", "message": "Please provide a valid Bearer token or set GCP environment variables"}]
+    return query_gkg_impl(credentials, where_clause, select_fields, limit)
 
 
-@mcp.tool()
+@mcp.tool(tags=["query"])
 def query_cloudvision(
-    where_clause: Optional[str] = None,
-    select_fields: str = "*",
-    limit: int = 100
+    where_clause: Annotated[Optional[str], Field(description="SQL WHERE clause without WHERE keyword. Include timestamp >= YYYYMMDDhhmmss")] = None,
+    select_fields: Annotated[str, Field(description="Comma-separated field names")] = "*",
+    limit: Annotated[int, Field(description="Maximum rows to return (max: 10000)", ge=1, le=10000)] = 100
 ) -> List[Dict[str, Any]]:
     """
-    Query the GDELT CloudVision table for visual analysis of images embedded in news articles.
+    Query the GDELT CloudVision table for visual analysis of news images.
     
-    Use this tool when you need to analyze:
-    - Visual content from news images (detected objects, labels, scenes)
-    - Facial recognition and emotion detection in news photos
-    - Optical Character Recognition (OCR) text from images
-    - Logo and brand detection in visual content
-    - Safe search classifications (violence, adult content, etc.)
-    - Image metadata and source URLs
+    Use this tool to analyze visual content from news images. Each row represents an image with
+    Google Cloud Vision API analysis including detected objects, labels, facial recognition,
+    OCR text, logos, and safe search classifications.
     
-    This table contains computer vision analysis powered by Google Cloud Vision API. Each row represents
-    an image from news coverage with detailed visual analysis. Use this to understand visual narratives,
-    detect objects/people in news imagery, or extract text from photos.
-
-    ! This table is very large - ALWAYS use a WHERE clause !
+    Use when you need: visual content analysis (objects, labels, scenes), facial recognition and
+    emotions, OCR text from images, logo/brand detection, or safe search classifications.
     
-    Args:
-        where_clause: SQL WHERE clause without the WHERE keyword
-        select_fields: Comma-separated list of fields to select (default: all fields)
-        limit: Maximum number of rows to return (default: 100, max: 10000)
-    
-    Returns:
-        List of dictionaries representing the query results
-    
-    Example:
-        query_cloudvision(where_clause="labels LIKE '%protest%'", limit=50)
+    ⚠️ COST: Can be large depending on coverage. Include timestamp filters. Without filters
+    can scan 5GB+ → $0.025+
     """
-    # Get credentials from Bearer token
     credentials = get_credentials_from_token()
-    
     if not credentials:
-        return [{
-            "error": "Authentication required",
-            "message": "Please provide a valid Bearer token in the Authorization header",
-            "format": "project_id|private_key|client_email",
-            "instructions": "See README for instructions on obtaining and formatting your GCP credentials"
-        }]
-    
-    project_id, private_key, client_email = credentials
-    
-    try:
-        # Create client with user's credentials
-        client = GDELTBigQueryClient(
-            project_id=project_id,
-            private_key=private_key,
-            client_email=client_email
-        )
-        
-        limit = min(limit, 10000)
-        
-        results = client.query(
-            table=client.CLOUDVISION_TABLE,
-            where_clause=where_clause,
-            select_fields=select_fields,
-            limit=limit
-        )
-        
-        return results
-    except Exception as e:
-        return [{
-            "error": "Query failed",
-            "message": str(e),
-            "help": "Verify your GCP credentials have BigQuery access to gdelt-bq.gdeltv2 dataset"
-        }]
+        credentials = get_credentials_from_env()
+    if not credentials:
+        return [{"error": "Authentication required", "message": "Please provide a valid Bearer token or set GCP environment variables"}]
+    return query_cloudvision_impl(credentials, where_clause, select_fields, limit)
 
 
 # ============================================================================
-# CAMEO TAXONOMY TOOLS - Access event and actor code lookups
+# COST OPTIMIZATION TOOLS
 # ============================================================================
 
-@mcp.tool()
-def get_cameo_event_codes(
-    category: Optional[str] = None,
-    search_keyword: Optional[str] = None
+@mcp.tool(tags=["cost"])
+def estimate_query_cost(
+    table: Annotated[Literal["events", "eventmentions", "gkg", "cloudvision"], Field(description="Table name")],
+    where_clause: Annotated[Optional[str], Field(description="Optional WHERE clause without WHERE keyword")] = None,
+    select_fields: Annotated[str, Field(description='Field names to select')] = "*"
 ) -> Dict[str, Any]:
     """
-    Get CAMEO event code taxonomy for understanding and constructing event queries.
+    Use this tool to estimate query cost before executing (dry-run only, no actual query).
     
-    Use this tool to:
-    - Lookup event code definitions before querying the Events table
-    - Find the right EventRootCode or EventCode for your analysis
-    - Discover what types of events are available (protests, military actions, negotiations, etc.)
-    - Search for event codes by keyword (e.g., "protest", "conflict", "agreement")
-    - Browse event codes by category (01-20, each representing a class of events)
+    Performs a BigQuery dry-run that calculates bytes to be scanned without running the query.
+    Always use this before exploratory queries on GKG or EventMentions to verify date filters
+    are working and avoid accidentally expensive operations.
     
-    CAMEO codes are hierarchical: root codes (e.g., "19") represent broad categories, while specific 
-    codes (e.g., "193") represent detailed event types. Always use this before querying events to 
-    ensure you're using the correct codes.
-    
-    Args:
-        category: Optional two-digit category code to filter by (e.g., "01", "19")
-        search_keyword: Optional keyword to search in event descriptions
-    
-    Returns:
-        Dictionary of event codes and their descriptions
-    
-    Examples:
-        get_cameo_event_codes(category="19")  # Get all military force events
-        get_cameo_event_codes(search_keyword="protest")  # Search for protest-related events
+    Returns: Dictionary with bytes_processed, gb_processed, and estimated_cost_usd
     """
-    if search_keyword:
-        codes = search_event_codes(search_keyword)
-        return {
-            "search_keyword": search_keyword,
-            "count": len(codes),
-            "codes": codes
-        }
-    elif category:
-        codes = get_event_codes_by_category(category)
-        return {
-            "category": category,
-            "count": len(codes),
-            "codes": codes
-        }
-    else:
-        return {
-            "count": len(CAMEO_EVENT_CODES),
-            "codes": CAMEO_EVENT_CODES
-        }
+    credentials = get_credentials_from_token()
+    if not credentials:
+        credentials = get_credentials_from_env()
+    if not credentials:
+        return {"error": "Authentication required", "message": "Please provide a valid Bearer token or set GCP environment variables"}
+    return estimate_query_cost_impl(credentials, table, where_clause, select_fields)
 
 
-@mcp.tool()
-def get_cameo_actor_codes(code_type: str = "all") -> Dict[str, Any]:
+@mcp.tool(tags=["cost"])
+def create_materialized_subset(
+    source_table: Annotated[Literal["events", "eventmentions", "gkg", "cloudvision"], Field(description="Source table name")],
+    subset_name: Annotated[str, Field(description='Subset name (alphanumeric and underscores only, e.g., "ukraine_jan2025")')],
+    where_clause: Annotated[str, Field(description="WHERE clause to filter data. MUST include date filters for cost-effectiveness")],
+    select_fields: Annotated[str, Field(description='Fields to select (consider selecting only needed fields)')] = "*",
+    description: Annotated[Optional[str], Field(description="Optional description for documentation")] = None
+) -> Dict[str, Any]:
     """
-    Get CAMEO actor code taxonomy for understanding and filtering by actors in GDELT data.
+    Use this tool to create a filtered subset that enables 50-100x faster and cheaper querying.
     
-    Use this tool to:
-    - Lookup country codes (3-letter ISO codes like 'USA', 'CHN', 'RUS') for Actor queries
-    - Find actor type codes (GOV=Government, MIL=Military, COP=Police, etc.) 
-    - Understand actor classification before querying Events or other tables
-    - Construct WHERE clauses with the correct actor identifiers
+    Creates a materialized table with filtered GDELT data that auto-expires after 48 hours.
+    One-time filtering cost (~$0.001-0.01), then query the small table repeatedly for near-free
+    (~$0.00001 per query).
     
-    Actor codes help identify WHO is involved in events. Country codes identify national actors,
-    while type codes classify the kind of actor (government, military, rebel, media, etc.).
-    Use this reference before filtering by Actor1CountryCode, Actor2CountryCode, or actor types.
-    
-    Args:
-        code_type: Type of codes to return - "countries", "types", or "all" (default: "all")
-    
-    Returns:
-        Dictionary of actor codes and their descriptions
-    
-    Examples:
-        get_cameo_actor_codes(code_type="countries")  # Get all country codes
-        get_cameo_actor_codes(code_type="types")  # Get actor type codes (GOV, MIL, etc.)
+    Returns: Dictionary with creation status, cost estimate, row count, subset location, and expiration time
     """
-    if code_type == "countries":
-        return {
-            "type": "country_codes",
-            "count": len(CAMEO_COUNTRY_CODES),
-            "codes": CAMEO_COUNTRY_CODES
-        }
-    elif code_type == "types":
-        return {
-            "type": "actor_type_codes",
-            "count": len(CAMEO_TYPE_CODES),
-            "codes": CAMEO_TYPE_CODES
-        }
-    else:
-        return {
-            "type": "all",
-            "country_codes": CAMEO_COUNTRY_CODES,
-            "actor_type_codes": CAMEO_TYPE_CODES,
-            "total_count": len(CAMEO_COUNTRY_CODES) + len(CAMEO_TYPE_CODES)
-        }
+    credentials = get_credentials_from_token()
+    if not credentials:
+        credentials = get_credentials_from_env()
+    if not credentials:
+        return {"error": "Authentication required", "message": "Please provide a valid Bearer token or set GCP environment variables"}
+    return create_materialized_subset_impl(
+        credentials, source_table, subset_name, where_clause, select_fields, description
+    )
+
+
+@mcp.tool(tags=["cost"])
+def list_materialized_subsets() -> List[Dict[str, Any]]:
+    """
+    Use this tool to see all available materialized subsets with their metadata.
+    
+    Call this FIRST before creating a new subset - someone may have already created one that
+    covers your needs. Also use to check expiration status, monitor storage, or find subsets
+    needing extension/cleanup.
+    
+    Returns: List of subsets with name, size, row count, creation/expiration time, and description
+    """
+    credentials = get_credentials_from_token()
+    if not credentials:
+        credentials = get_credentials_from_env()
+    if not credentials:
+        return [{"error": "Authentication required", "message": "Please provide a valid Bearer token or set GCP environment variables"}]
+    return list_materialized_subsets_impl(credentials)
+
+
+@mcp.tool(tags=["cost"])
+def query_materialized_subset(
+    subset_name: Annotated[str, Field(description="Subset name (from list_materialized_subsets)")],
+    where_clause: Annotated[Optional[str], Field(description="Optional additional WHERE clause for further filtering")] = None,
+    select_fields: Annotated[str, Field(description="Fields to select")] = "*",
+    limit: Annotated[int, Field(description="Maximum rows to return (max: 10000)", ge=1, le=10000)] = 1000
+) -> List[Dict[str, Any]]:
+    """
+    Use this tool to query a materialized subset (near-free operation, ~$0.00001 per query).
+    
+    After creating a subset once, query it many times without worrying about cost. This enables
+    fast iteration and experimentation on filtered GDELT data without re-scanning the massive
+    source tables.
+    
+    Returns: List of rows matching the query, each row as a dictionary of field-value pairs
+    """
+    credentials = get_credentials_from_token()
+    if not credentials:
+        credentials = get_credentials_from_env()
+    if not credentials:
+        return [{"error": "Authentication required", "message": "Please provide a valid Bearer token or set GCP environment variables"}]
+    return query_materialized_subset_impl(credentials, subset_name, where_clause, select_fields, limit)
+
+
+# ============================================================================
+# CAMEO TAXONOMY TOOLS
+# ============================================================================
+
+@mcp.tool(tags=["cameo"])
+def get_cameo_event_codes(
+    category: Annotated[Optional[str], Field(description='Optional two-digit category code to filter by (e.g., "01", "19")')] = None,
+    search_keyword: Annotated[Optional[str], Field(description='Optional keyword to search in event descriptions (e.g., "protest")')] = None
+) -> Dict[str, Any]:
+    """
+    Get CAMEO event code taxonomy for understanding event types.
+    
+    Use this tool to lookup event code definitions before querying the Events table, find the
+    right EventRootCode or EventCode for analysis, discover available event types (protests,
+    military actions, negotiations, etc.), or search by keyword.
+    
+    CAMEO codes are hierarchical: root codes (e.g., "19") represent broad categories, specific
+    codes (e.g., "193") represent detailed types. Always use this before querying events to
+    ensure correct codes.
+    """
+    return get_cameo_event_codes_impl(category, search_keyword)
+
+
+@mcp.tool(tags=["cameo"])
+def get_cameo_actor_codes(
+    code_type: Annotated[Literal["countries", "types", "all"], Field(description="Type of codes to retrieve")] = "all"
+) -> Dict[str, Any]:
+    """
+    Get CAMEO actor code taxonomy for understanding actors in events.
+    
+    Use this tool to lookup country codes (3-letter ISO like USA, CHN, RUS) for Actor queries,
+    find actor type codes (GOV=Government, MIL=Military, COP=Police, etc.), or understand actor
+    classification before querying Events.
+    
+    Actor codes identify WHO is involved in events. Country codes identify national actors, type
+    codes classify the kind of actor (government, military, rebel, media, etc.). Use this reference
+    before filtering by Actor1CountryCode, Actor2CountryCode, or actor types.
+    """
+    return get_cameo_actor_codes_impl(code_type)
 
 
 # ============================================================================

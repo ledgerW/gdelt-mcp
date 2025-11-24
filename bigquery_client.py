@@ -216,3 +216,202 @@ class GDELTBigQueryClient:
             }
         except Exception as e:
             return {"error": str(e)}
+    
+    def create_materialized_subset(
+        self,
+        source_table: str,
+        subset_name: str,
+        where_clause: str,
+        select_fields: str = "*",
+        description: Optional[str] = None
+    ) -> Dict[str, Any]:
+        """
+        Create a materialized subset table from a GDELT table with 48-hour auto-expiration.
+        
+        This is the recommended workflow for cost-effective analysis:
+        1. Filter data once with tight date ranges
+        2. Store in a subset table (auto-expires in 48 hours)
+        3. Query the subset multiple times (near-free)
+        
+        Args:
+            source_table: Source GDELT table name
+            subset_name: Name for the new subset table (alphanumeric and underscores only)
+            where_clause: WHERE clause to filter data (MUST include date filters)
+            select_fields: Fields to select (default: all)
+            description: Optional description for the subset
+            
+        Returns:
+            Dictionary with creation status and metadata
+        """
+        warnings = []
+        
+        # Ensure dataset exists
+        dataset_id = f"{self.project_id}.gdelt_subsets"
+        dataset = bigquery.Dataset(dataset_id)
+        dataset.location = "US"
+        
+        try:
+            self.client.create_dataset(dataset, exists_ok=True)
+        except Exception as e:
+            if "already exists" not in str(e).lower():
+                return {
+                    "status": "error",
+                    "error": f"Failed to create dataset: {str(e)}"
+                }
+        
+        # Build CREATE TABLE query
+        table_id = f"{dataset_id}.{subset_name}"
+        create_query = f"""
+        CREATE OR REPLACE TABLE `{table_id}` AS
+        SELECT {select_fields}
+        FROM `{source_table}`
+        WHERE {where_clause}
+        """
+        
+        # Estimate cost first
+        cost_estimate = self.estimate_query_cost(create_query)
+        
+        # Execute creation query - CRITICAL OPERATION
+        try:
+            query_job = self.client.query(create_query)
+            result = query_job.result()
+            rows_created = query_job.num_dml_affected_rows or 0
+        except Exception as e:
+            return {
+                "status": "error",
+                "error": f"Failed to create table: {str(e)}",
+                "help": "Ensure your WHERE clause includes date filters for partition pruning"
+            }
+        
+        # Set expiration - OPTIONAL OPERATION
+        try:
+            expiration_timestamp = "TIMESTAMP_ADD(CURRENT_TIMESTAMP(), INTERVAL 48 HOUR)"
+            alter_query = f"""
+            ALTER TABLE `{table_id}`
+            SET OPTIONS(
+                expiration_timestamp = {expiration_timestamp}
+            )
+            """
+            self.client.query(alter_query).result()
+        except Exception as e:
+            warnings.append(f"Could not set expiration: {str(e)}")
+        
+        # Update description if provided - OPTIONAL OPERATION
+        if description:
+            try:
+                table = self.client.get_table(table_id)
+                table.description = description
+                self.client.update_table(table, ["description"])
+            except Exception as e:
+                warnings.append(f"Could not set description: {str(e)}")
+        
+        response = {
+            "status": "success",
+            "table_id": table_id,
+            "subset_name": subset_name,
+            "source_table": source_table,
+            "rows_created": rows_created,
+            "cost_estimate": cost_estimate,
+            "expires_in_hours": 48,
+            "message": "Subset created successfully. Will auto-delete in 48 hours."
+        }
+        
+        if warnings:
+            response["warnings"] = warnings
+        
+        return response
+    
+    def list_materialized_subsets(self) -> List[Dict[str, Any]]:
+        """
+        List all materialized subset tables in the user's project.
+        
+        Returns:
+            List of subset metadata dictionaries
+        """
+        try:
+            dataset_id = f"{self.project_id}.gdelt_subsets"
+            
+            # Check if dataset exists
+            try:
+                dataset = self.client.get_dataset(dataset_id)
+            except Exception:
+                return []
+            
+            # List tables in dataset
+            tables = self.client.list_tables(dataset_id)
+            
+            subsets = []
+            for table_ref in tables:
+                table = self.client.get_table(table_ref)
+                
+                # Calculate expiration info
+                expires_in_hours = None
+                is_expired = False
+                if table.expires:
+                    from datetime import datetime, timezone
+                    now = datetime.now(timezone.utc)
+                    time_diff = table.expires - now
+                    expires_in_hours = round(time_diff.total_seconds() / 3600, 1)
+                    is_expired = expires_in_hours <= 0
+                
+                subsets.append({
+                    "subset_name": table.table_id,
+                    "table_id": f"{dataset_id}.{table.table_id}",
+                    "created": table.created.isoformat() if table.created else None,
+                    "expires": table.expires.isoformat() if table.expires else None,
+                    "expires_in_hours": expires_in_hours,
+                    "is_expired": is_expired,
+                    "size_mb": round(table.num_bytes / (1024 ** 2), 2) if table.num_bytes else 0,
+                    "num_rows": table.num_rows or 0,
+                    "description": table.description or ""
+                })
+            
+            return subsets
+            
+        except Exception as e:
+            return [{
+                "error": str(e),
+                "message": "Failed to list subsets"
+            }]
+    
+    def query_materialized_subset(
+        self,
+        subset_name: str,
+        where_clause: Optional[str] = None,
+        select_fields: str = "*",
+        limit: int = 1000
+    ) -> List[Dict[str, Any]]:
+        """
+        Query a materialized subset table (near-free operation).
+        
+        Args:
+            subset_name: Name of the subset to query
+            where_clause: Optional additional WHERE clause
+            select_fields: Fields to select (default: all)
+            limit: Maximum number of rows to return
+            
+        Returns:
+            List of dictionaries representing rows
+        """
+        table_id = f"{self.project_id}.gdelt_subsets.{subset_name}"
+        
+        # Build query
+        query = f"SELECT {select_fields} FROM `{table_id}`"
+        
+        if where_clause:
+            query += f" WHERE {where_clause}"
+        
+        query += f" LIMIT {limit}"
+        
+        try:
+            query_job = self.client.query(query)
+            results = query_job.result()
+            
+            rows = []
+            for row in results:
+                rows.append(dict(row.items()))
+            
+            return rows
+            
+        except Exception as e:
+            raise RuntimeError(f"Query failed: {str(e)}")

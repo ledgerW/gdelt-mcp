@@ -1,0 +1,22 @@
+"""Events table schema resource."""
+
+from schema_docs import get_table_schema
+
+
+def get_events_schema_resource_impl() -> str:
+    """Implementation for Events schema resource."""
+    schema = get_table_schema("events")
+    return f"""# GDELT Events Table Schema
+
+**Table:** {schema['table_name']}
+
+**Description:** {schema['description']}
+
+## Fields
+
+{chr(10).join([f"- **{field['name']}** ({field['type']}): {field['description']}" for field in schema['fields']])}
+
+## Sample Queries
+
+{chr(10).join([f"### {q['description']}{chr(10)}```sql{chr(10)}{q['query']}{chr(10)}```{chr(10)}" for q in schema['sample_queries']])}
+"""
