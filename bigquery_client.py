@@ -19,27 +19,50 @@ class GDELTBigQueryClient:
     GKG_TABLE = "gdelt-bq.gdeltv2.gkg_partitioned"
     CLOUDVISION_TABLE = "gdelt-bq.gdeltv2.cloudvision_partitioned"
     
-    def __init__(self, credentials_path: Optional[str] = None, project_id: Optional[str] = None):
+    def __init__(
+        self, 
+        credentials_path: Optional[str] = None, 
+        project_id: Optional[str] = None,
+        private_key: Optional[str] = None,
+        client_email: Optional[str] = None
+    ):
         """
         Initialize BigQuery client.
         
         Args:
             credentials_path: Path to GCP service account JSON file (optional)
             project_id: GCP project ID (optional, defaults to GCP_PROJECT_ID env var)
+            private_key: GCP service account private key (optional, for token-based auth)
+            client_email: GCP service account email (optional, for token-based auth)
         """
         # Get project ID
         self.project_id = project_id or os.getenv("GCP_PROJECT_ID")
         
-        # Try to load credentials from file first if provided
-        if credentials_path and os.path.exists(credentials_path):
+        # Priority: explicit credential params > credentials_path > env vars > default
+        if private_key and client_email:
+            # Use provided credentials (from Bearer token)
+            credentials_info = {
+                "type": "service_account",
+                "project_id": self.project_id,
+                "private_key": private_key.replace("\\n", "\n"),
+                "client_email": client_email,
+                "token_uri": "https://oauth2.googleapis.com/token",
+            }
+            
+            credentials = service_account.Credentials.from_service_account_info(
+                credentials_info,
+                scopes=["https://www.googleapis.com/auth/bigquery"]
+            )
+            self.client = bigquery.Client(credentials=credentials, project=self.project_id)
+        elif credentials_path and os.path.exists(credentials_path):
+            # Use credentials file
             credentials = service_account.Credentials.from_service_account_file(
                 credentials_path,
                 scopes=["https://www.googleapis.com/auth/bigquery"]
             )
             self.client = bigquery.Client(credentials=credentials, project=self.project_id)
-        # Otherwise, try to create credentials from environment variables
         elif os.getenv("GCP_PRIVATE_KEY") and os.getenv("GCP_CLIENT_EMAIL"):
-            # Build credentials info dict from environment variables
+            # Use environment variables
             credentials_info = {
                 "type": "service_account",
                 "project_id": self.project_id,
@@ -48,7 +71,6 @@ class GDELTBigQueryClient:
                 "token_uri": "https://oauth2.googleapis.com/token",
             }
             
-            # Create credentials directly from the dict
             credentials = service_account.Credentials.from_service_account_info(
                 credentials_info,
                 scopes=["https://www.googleapis.com/auth/bigquery"]

@@ -15,15 +15,69 @@ This MCP server exposes four GDELT 2.0 tables along with CAMEO taxonomy lookups 
 
 - ✅ **4 MCP Resources**: Schema documentation for each table
 - ✅ **6 Query Tools**: Execute SQL queries on all 4 tables + CAMEO taxonomy lookups
+- ✅ **Bearer Token Authentication**: Secure token-based auth using GCP credentials
 - ✅ **BigQuery Integration**: Direct access to GDELT's partitioned BigQuery tables
-- ✅ **Minimal Configuration**: Only 3 environment variables needed
+- ✅ **User Pays Model**: Each user queries with their own GCP credentials
 
 ## Prerequisites
 
 - Python 3.11+
-- Google Cloud Project with BigQuery API enabled
-- Service account credentials with BigQuery access
 - `uv` package manager ([install instructions](https://github.com/astral-sh/uv))
+- Google Cloud Platform account
+- GCP project with BigQuery API enabled
+- Service account with BigQuery read access to GDELT dataset
+
+## Getting Your GCP Credentials
+
+Before using the GDELT MCP server, you need to obtain Google Cloud Platform credentials with access to the GDELT BigQuery dataset.
+
+### Step 1: Create a GCP Project
+
+1. Go to the [Google Cloud Console](https://console.cloud.google.com/)
+2. Create a new project or select an existing one
+3. Note your **Project ID** (you'll need this later)
+
+### Step 2: Enable BigQuery API
+
+1. In your GCP project, go to **APIs & Services > Library**
+2. Search for "BigQuery API"
+3. Click **Enable**
+
+### Step 3: Create a Service Account
+
+1. Go to **IAM & Admin > Service Accounts**
+2. Click **Create Service Account**
+3. Name it (e.g., "gdelt-mcp-access")
+4. Click **Create and Continue**
+
+### Step 4: Grant BigQuery Permissions
+
+Add these roles to your service account:
+- **BigQuery Data Viewer** - Read access to data
+- **BigQuery Job User** - Ability to run queries
+
+### Step 5: Create and Download Key
+
+1. Click on your newly created service account
+2. Go to the **Keys** tab
+3. Click **Add Key > Create New Key**
+4. Choose **JSON** format
+5. Click **Create** (this downloads the key file)
+
+### Step 6: Extract Credentials
+
+Open the downloaded JSON file. You'll need these three values:
+- `project_id`
+- `private_key` (keep the `\n` characters as-is)
+- `client_email`
+
+### Step 7: Verify Access to GDELT
+
+The GDELT dataset (`gdelt-bq.gdeltv2`) is publicly accessible, but you still need valid GCP credentials to query it. Your queries will be billed to your GCP project.
+
+**Important**: GDELT tables are large. Always use date filters in your queries to minimize costs.
+
+---
 
 ## Installation
 
@@ -33,20 +87,7 @@ This MCP server exposes four GDELT 2.0 tables along with CAMEO taxonomy lookups 
 cd gdelt-mcp
 ```
 
-### 2. Set Up Environment Variables
-
-Create a `.env` file with your GCP service account credentials:
-
-```env
-# GCP Service Account Credentials (for BigQuery access)
-GCP_PROJECT_ID=your-project-id
-GCP_PRIVATE_KEY="-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----\n"
-GCP_CLIENT_EMAIL=your-service-account@your-project.iam.gserviceaccount.com
-```
-
-**Important**: Only the actual secrets are stored in `.env`. The client uses these credentials directly without creating a JSON file.
-
-### 3. Install Dependencies
+### 2. Install Dependencies
 
 Using uv (automatically creates virtual environment):
 
@@ -59,34 +100,56 @@ This will:
 - Install all dependencies from `pyproject.toml`
 - Lock dependencies in `uv.lock`
 
-## Configuration
+## Authentication
 
-### GCP Credentials
+The GDELT MCP server uses **Bearer token authentication**. Each user provides their own GCP credentials, which are used to execute BigQuery queries on their behalf. This means:
 
-The server uses environment variables from `.env` for authentication. This approach:
-- ✅ Keeps secrets out of version control
-- ✅ Works seamlessly in containerized/cloud environments  
-- ✅ Minimal configuration - only 3 variables needed
+✅ **You control your data**: Queries run under your GCP project  
+✅ **You pay for usage**: BigQuery costs are billed to your account  
+✅ **Secure**: Your credentials are never stored server-side  
 
-**To set up credentials:**
+### Token Format
 
-1. Create a GCP service account with these permissions:
-   - `bigquery.jobs.create`
-   - `bigquery.tables.getData`
-   - `bigquery.tables.get`
+The Bearer token is a pipe-delimited (`|`) concatenation of your three GCP credentials:
 
-2. Download the service account JSON key file
+```
+project_id|private_key|client_email
+```
 
-3. Copy only the secret values from the JSON into your `.env` file:
-   - `project_id` → `GCP_PROJECT_ID`
-   - `private_key` → `GCP_PRIVATE_KEY` (keep the `\n` newline characters)
-   - `client_email` → `GCP_CLIENT_EMAIL`
+**Example**:
+```
+my-project-123|-----BEGIN PRIVATE KEY-----\nMIIE...-----END PRIVATE KEY-----\n|my-service@my-project.iam.gserviceaccount.com
+```
 
-4. The server will use these credentials directly (no JSON file created)
+### Generating Your Token
 
-**Note**: The `.gitignore` file is configured to exclude `.env` from version control for security.
+Using Python:
+```python
+project_id = "your-project-id"
+private_key = "-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----\n"
+client_email = "your-service@your-project.iam.gserviceaccount.com"
 
-The service account needs read access to the GDELT BigQuery dataset: `gdelt-bq.gdeltv2.*`
+token = f"{project_id}|{private_key}|{client_email}"
+```
+
+Using shell:
+```bash
+# Extract from your service account JSON file
+PROJECT_ID=$(cat service-account.json | jq -r '.project_id')
+PRIVATE_KEY=$(cat service-account.json | jq -r '.private_key')
+CLIENT_EMAIL=$(cat service-account.json | jq -r '.client_email')
+
+TOKEN="${PROJECT_ID}|${PRIVATE_KEY}|${CLIENT_EMAIL}"
+echo $TOKEN
+```
+
+### Security Best Practices
+
+- 🔒 **Never commit tokens to git**
+- 🔒 **Store tokens in environment variables** or secure vaults
+- 🔒 **Rotate service account keys** regularly
+- 🔒 **Use least-privilege IAM roles** (BigQuery Data Viewer + Job User only)
+- 🔒 **Monitor your GCP billing** for unexpected usage
 
 ## Running the Server
 
@@ -109,6 +172,124 @@ uv run fastmcp dev server.py
 ```
 
 This opens an interactive inspector to test tools and resources.
+
+## Client Setup Examples
+
+### FastMCP Client (Python)
+
+```python
+from fastmcp import Client
+from fastmcp.client.auth import BearerAuth
+import os
+import json
+
+# Load your service account credentials
+with open('service-account.json') as f:
+    creds = json.load(f)
+
+# Create Bearer token
+token = f"{creds['project_id']}|{creds['private_key']}|{creds['client_email']}"
+
+# Connect to the MCP server
+async with Client(
+    "https://your-server-url/mcp",
+    auth=BearerAuth(token=token)
+) as client:
+    # Use the tools
+    result = await client.call_tool("query_events", {
+        "where_clause": "SQLDATE >= 20240101",
+        "limit": 10
+    })
+    print(result)
+```
+
+### LangChain MCP Client (Python)
+
+```python
+from langchain_mcp_adapters.client import MultiServerMCPClient
+from langchain.agents import create_agent
+import json
+
+# Load your credentials
+with open('service-account.json') as f:
+    creds = json.load(f)
+
+# Create Bearer token
+token = f"{creds['project_id']}|{creds['private_key']}|{creds['client_email']}"
+
+# Configure MCP client
+client = MultiServerMCPClient({
+    "gdelt": {
+        "transport": "streamable_http",
+        "url": "https://your-server-url/mcp",
+        "headers": {
+            "Authorization": f"Bearer {token}",
+        },
+    }
+})
+
+# Get tools and create agent
+tools = await client.get_tools()
+agent = create_agent("openai:gpt-4", tools)
+
+# Use the agent
+response = await agent.ainvoke({
+    "messages": "Find recent military conflicts in Ukraine"
+})
+print(response)
+```
+
+### HTTP Request (cURL)
+
+```bash
+# Set your credentials
+PROJECT_ID="your-project-id"
+PRIVATE_KEY="-----BEGIN PRIVATE KEY-----\n...\n-----END PRIVATE KEY-----\n"
+CLIENT_EMAIL="your-service@your-project.iam.gserviceaccount.com"
+
+# Create token
+TOKEN="${PROJECT_ID}|${PRIVATE_KEY}|${CLIENT_EMAIL}"
+
+# Make request
+curl -X POST https://your-server-url/mcp \
+  -H "Authorization: Bearer ${TOKEN}" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "jsonrpc": "2.0",
+    "method": "tools/call",
+    "params": {
+      "name": "query_events",
+      "arguments": {
+        "where_clause": "SQLDATE >= 20240101",
+        "limit": 10
+      }
+    },
+    "id": 1
+  }'
+```
+
+### Environment Variable Method
+
+For production use, store your token in an environment variable:
+
+```bash
+# Generate and export token
+export GDELT_MCP_TOKEN="$(cat service-account.json | jq -r '[.project_id, .private_key, .client_email] | join("|")')"
+```
+
+Then in your Python code:
+```python
+import os
+from fastmcp import Client
+from fastmcp.client.auth import BearerAuth
+
+token = os.getenv("GDELT_MCP_TOKEN")
+async with Client("https://your-server-url/mcp", auth=BearerAuth(token=token)) as client:
+    # Use the client
+    pass
+```
+
+---
 
 ## MCP Resources
 
