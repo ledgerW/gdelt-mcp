@@ -63,10 +63,9 @@ def create_materialized_subset_impl(
     subset_name: str,
     where_clause: str,
     select_fields: str = "*",
-    description: Optional[str] = None,
-    expiration_hours: int = 48
+    description: Optional[str] = None
 ) -> Dict[str, Any]:
-    """Implementation for creating materialized subset."""
+    """Implementation for creating materialized subset with 48-hour auto-expiration."""
     project_id, private_key, client_email = credentials
     
     try:
@@ -95,8 +94,7 @@ def create_materialized_subset_impl(
             subset_name=subset_name,
             where_clause=where_clause,
             select_fields=select_fields,
-            description=description,
-            expiration_hours=expiration_hours
+            description=description
         )
         
         return result
@@ -164,55 +162,3 @@ def query_materialized_subset_impl(
             "message": str(e),
             "help": "Verify the subset exists using list_materialized_subsets"
         }]
-
-
-def extend_subset_expiration_impl(
-    credentials: tuple,
-    subset_name: str,
-    additional_hours: int = 48
-) -> Dict[str, Any]:
-    """Implementation for extending subset expiration."""
-    project_id, private_key, client_email = credentials
-    
-    try:
-        client = GDELTBigQueryClient(
-            project_id=project_id,
-            private_key=private_key,
-            client_email=client_email
-        )
-        
-        result = client.extend_subset_expiration(
-            subset_name=subset_name,
-            additional_hours=additional_hours
-        )
-        
-        return result
-        
-    except Exception as e:
-        return {
-            "error": "Failed to extend expiration",
-            "message": str(e),
-            "help": "Verify the subset exists using list_materialized_subsets"
-        }
-
-
-def delete_materialized_subset_impl(credentials: tuple, subset_name: str) -> Dict[str, Any]:
-    """Implementation for deleting materialized subset."""
-    project_id, private_key, client_email = credentials
-    
-    try:
-        client = GDELTBigQueryClient(
-            project_id=project_id,
-            private_key=private_key,
-            client_email=client_email
-        )
-        
-        result = client.delete_materialized_subset(subset_name=subset_name)
-        return result
-        
-    except Exception as e:
-        return {
-            "error": "Failed to delete subset",
-            "message": str(e),
-            "help": "Verify the subset exists using list_materialized_subsets"
-        }

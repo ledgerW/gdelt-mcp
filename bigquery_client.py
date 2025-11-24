@@ -223,11 +223,10 @@ class GDELTBigQueryClient:
         subset_name: str,
         where_clause: str,
         select_fields: str = "*",
-        description: Optional[str] = None,
-        expiration_hours: int = 48
+        description: Optional[str] = None
     ) -> Dict[str, Any]:
         """
-        Create a materialized subset table from a GDELT table with auto-expiration.
+        Create a materialized subset table from a GDELT table with 48-hour auto-expiration.
         
         This is the recommended workflow for cost-effective analysis:
         1. Filter data once with tight date ranges
@@ -240,43 +239,53 @@ class GDELTBigQueryClient:
             where_clause: WHERE clause to filter data (MUST include date filters)
             select_fields: Fields to select (default: all)
             description: Optional description for the subset
-            expiration_hours: Hours until auto-deletion (default: 48)
             
         Returns:
             Dictionary with creation status and metadata
         """
+        warnings = []
+        
+        # Ensure dataset exists
+        dataset_id = f"{self.project_id}.gdelt_subsets"
+        dataset = bigquery.Dataset(dataset_id)
+        dataset.location = "US"
+        
         try:
-            # Ensure dataset exists
-            dataset_id = f"{self.project_id}.gdelt_subsets"
-            dataset = bigquery.Dataset(dataset_id)
-            dataset.location = "US"
-            
-            try:
-                self.client.create_dataset(dataset, exists_ok=True)
-            except Exception as e:
-                if "already exists" not in str(e).lower():
-                    raise
-            
-            # Build CREATE TABLE query
-            table_id = f"{dataset_id}.{subset_name}"
-            create_query = f"""
-            CREATE OR REPLACE TABLE `{table_id}` AS
-            SELECT {select_fields}
-            FROM `{source_table}`
-            WHERE {where_clause}
-            """
-            
-            # Estimate cost first
-            cost_estimate = self.estimate_query_cost(create_query)
-            
-            # Execute creation query
+            self.client.create_dataset(dataset, exists_ok=True)
+        except Exception as e:
+            if "already exists" not in str(e).lower():
+                return {
+                    "status": "error",
+                    "error": f"Failed to create dataset: {str(e)}"
+                }
+        
+        # Build CREATE TABLE query
+        table_id = f"{dataset_id}.{subset_name}"
+        create_query = f"""
+        CREATE OR REPLACE TABLE `{table_id}` AS
+        SELECT {select_fields}
+        FROM `{source_table}`
+        WHERE {where_clause}
+        """
+        
+        # Estimate cost first
+        cost_estimate = self.estimate_query_cost(create_query)
+        
+        # Execute creation query - CRITICAL OPERATION
+        try:
             query_job = self.client.query(create_query)
             result = query_job.result()
-            
-            # Set expiration
-            table = self.client.get_table(table_id)
-            expiration_timestamp = f"TIMESTAMP_ADD(CURRENT_TIMESTAMP(), INTERVAL {expiration_hours} HOUR)"
-            
+            rows_created = query_job.num_dml_affected_rows or 0
+        except Exception as e:
+            return {
+                "status": "error",
+                "error": f"Failed to create table: {str(e)}",
+                "help": "Ensure your WHERE clause includes date filters for partition pruning"
+            }
+        
+        # Set expiration - OPTIONAL OPERATION
+        try:
+            expiration_timestamp = "TIMESTAMP_ADD(CURRENT_TIMESTAMP(), INTERVAL 48 HOUR)"
             alter_query = f"""
             ALTER TABLE `{table_id}`
             SET OPTIONS(
@@ -284,29 +293,33 @@ class GDELTBigQueryClient:
             )
             """
             self.client.query(alter_query).result()
-            
-            # Update description if provided
-            if description:
+        except Exception as e:
+            warnings.append(f"Could not set expiration: {str(e)}")
+        
+        # Update description if provided - OPTIONAL OPERATION
+        if description:
+            try:
+                table = self.client.get_table(table_id)
                 table.description = description
                 self.client.update_table(table, ["description"])
-            
-            return {
-                "status": "success",
-                "table_id": table_id,
-                "subset_name": subset_name,
-                "source_table": source_table,
-                "rows_created": query_job.num_dml_affected_rows or 0,
-                "cost_estimate": cost_estimate,
-                "expires_in_hours": expiration_hours,
-                "message": f"Subset created successfully. Will auto-delete in {expiration_hours} hours."
-            }
-            
-        except Exception as e:
-            return {
-                "status": "error",
-                "error": str(e),
-                "help": "Ensure your WHERE clause includes date filters for partition pruning"
-            }
+            except Exception as e:
+                warnings.append(f"Could not set description: {str(e)}")
+        
+        response = {
+            "status": "success",
+            "table_id": table_id,
+            "subset_name": subset_name,
+            "source_table": source_table,
+            "rows_created": rows_created,
+            "cost_estimate": cost_estimate,
+            "expires_in_hours": 48,
+            "message": "Subset created successfully. Will auto-delete in 48 hours."
+        }
+        
+        if warnings:
+            response["warnings"] = warnings
+        
+        return response
     
     def list_materialized_subsets(self) -> List[Dict[str, Any]]:
         """
@@ -360,83 +373,6 @@ class GDELTBigQueryClient:
                 "error": str(e),
                 "message": "Failed to list subsets"
             }]
-    
-    def delete_materialized_subset(self, subset_name: str) -> Dict[str, Any]:
-        """
-        Delete a materialized subset table.
-        
-        Args:
-            subset_name: Name of the subset to delete
-            
-        Returns:
-            Dictionary with deletion status
-        """
-        try:
-            table_id = f"{self.project_id}.gdelt_subsets.{subset_name}"
-            self.client.delete_table(table_id)
-            
-            return {
-                "status": "success",
-                "message": f"Subset '{subset_name}' deleted successfully"
-            }
-            
-        except Exception as e:
-            return {
-                "status": "error",
-                "error": str(e),
-                "message": f"Failed to delete subset '{subset_name}'"
-            }
-    
-    def extend_subset_expiration(
-        self,
-        subset_name: str,
-        additional_hours: int = 48
-    ) -> Dict[str, Any]:
-        """
-        Extend the expiration time of a materialized subset.
-        
-        Args:
-            subset_name: Name of the subset
-            additional_hours: Additional hours to extend (default: 48)
-            
-        Returns:
-            Dictionary with update status
-        """
-        try:
-            table_id = f"{self.project_id}.gdelt_subsets.{subset_name}"
-            
-            # Get current table
-            table = self.client.get_table(table_id)
-            
-            # Calculate new expiration
-            from datetime import datetime, timedelta, timezone
-            if table.expires:
-                new_expiration = table.expires + timedelta(hours=additional_hours)
-            else:
-                new_expiration = datetime.now(timezone.utc) + timedelta(hours=additional_hours)
-            
-            # Update expiration
-            alter_query = f"""
-            ALTER TABLE `{table_id}`
-            SET OPTIONS(
-                expiration_timestamp = TIMESTAMP '{new_expiration.strftime('%Y-%m-%d %H:%M:%S UTC')}'
-            )
-            """
-            self.client.query(alter_query).result()
-            
-            return {
-                "status": "success",
-                "subset_name": subset_name,
-                "new_expiration": new_expiration.isoformat(),
-                "message": f"Expiration extended by {additional_hours} hours"
-            }
-            
-        except Exception as e:
-            return {
-                "status": "error",
-                "error": str(e),
-                "message": f"Failed to extend expiration for '{subset_name}'"
-            }
     
     def query_materialized_subset(
         self,

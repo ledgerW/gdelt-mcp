@@ -25,8 +25,6 @@ from tools.cost_optimization import (
     create_materialized_subset_impl,
     list_materialized_subsets_impl,
     query_materialized_subset_impl,
-    extend_subset_expiration_impl,
-    delete_materialized_subset_impl,
 )
 from tools.cameo_tools import (
     get_cameo_event_codes_impl,
@@ -303,15 +301,14 @@ def create_materialized_subset(
     subset_name: Annotated[str, Field(description='Subset name (alphanumeric and underscores only, e.g., "ukraine_jan2025")')],
     where_clause: Annotated[str, Field(description="WHERE clause to filter data. MUST include date filters for cost-effectiveness")],
     select_fields: Annotated[str, Field(description='Fields to select (consider selecting only needed fields)')] = "*",
-    description: Annotated[Optional[str], Field(description="Optional description for documentation")] = None,
-    expiration_hours: Annotated[int, Field(description="Hours until auto-deletion", ge=1)] = 48
+    description: Annotated[Optional[str], Field(description="Optional description for documentation")] = None
 ) -> Dict[str, Any]:
     """
     Use this tool to create a filtered subset that enables 50-100x faster and cheaper querying.
     
-    Creates a materialized table with filtered GDELT data. One-time filtering cost (~$0.001-0.01),
-    then query the small table repeatedly for near-free (~$0.00001 per query). Subsets auto-expire
-    after 48 hours to prevent storage costs.
+    Creates a materialized table with filtered GDELT data that auto-expires after 48 hours.
+    One-time filtering cost (~$0.001-0.01), then query the small table repeatedly for near-free
+    (~$0.00001 per query).
     
     Returns: Dictionary with creation status, cost estimate, row count, subset location, and expiration time
     """
@@ -321,7 +318,7 @@ def create_materialized_subset(
     if not credentials:
         return {"error": "Authentication required", "message": "Please provide a valid Bearer token or set GCP environment variables"}
     return create_materialized_subset_impl(
-        credentials, source_table, subset_name, where_clause, select_fields, description, expiration_hours
+        credentials, source_table, subset_name, where_clause, select_fields, description
     )
 
 
@@ -366,49 +363,6 @@ def query_materialized_subset(
     if not credentials:
         return [{"error": "Authentication required", "message": "Please provide a valid Bearer token or set GCP environment variables"}]
     return query_materialized_subset_impl(credentials, subset_name, where_clause, select_fields, limit)
-
-
-@mcp.tool(tags=["cost"])
-def extend_subset_expiration(
-    subset_name: Annotated[str, Field(description="Name of the subset to extend")],
-    additional_hours: Annotated[int, Field(description="Hours to add to expiration", ge=1)] = 48
-) -> Dict[str, Any]:
-    """
-    Use this tool to extend a subset's expiration time, keeping it available longer.
-    
-    By default, subsets auto-expire after 48 hours to prevent storage costs. Use this when
-    analysis takes longer than expected, you want to share with others, or need persistent
-    data for a long-running project.
-    
-    Returns: Dictionary with update status and new expiration time
-    """
-    credentials = get_credentials_from_token()
-    if not credentials:
-        credentials = get_credentials_from_env()
-    if not credentials:
-        return {"error": "Authentication required", "message": "Please provide a valid Bearer token or set GCP environment variables"}
-    return extend_subset_expiration_impl(credentials, subset_name, additional_hours)
-
-
-@mcp.tool(tags=["cost"])
-def delete_materialized_subset(
-    subset_name: Annotated[str, Field(description="Name of the subset to delete")]
-) -> Dict[str, Any]:
-    """
-    Use this tool to manually delete a materialized subset table.
-    
-    Use when analysis is complete and you no longer need the subset, want to free storage quota,
-    or need to recreate it with different parameters. Subsets auto-expire after 48 hours, so
-    manual deletion is optional.
-    
-    Returns: Dictionary with deletion status
-    """
-    credentials = get_credentials_from_token()
-    if not credentials:
-        credentials = get_credentials_from_env()
-    if not credentials:
-        return {"error": "Authentication required", "message": "Please provide a valid Bearer token or set GCP environment variables"}
-    return delete_materialized_subset_impl(credentials, subset_name)
 
 
 # ============================================================================
