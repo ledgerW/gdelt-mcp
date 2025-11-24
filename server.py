@@ -177,6 +177,8 @@ def query_events(
     
     This is the primary table for event-level analysis. Each row represents a unique event with actors, 
     action codes, and contextual information.
+
+    ! This table is very large - ALWAYS use a WHERE clause !
     
     Args:
         where_clause: SQL WHERE clause without the WHERE keyword (e.g., "Actor1CountryCode = 'USA'")
@@ -247,6 +249,8 @@ def query_eventmentions(
     
     This table contains one row for each time an event appears in media, linking back to events via GLOBALEVENTID.
     Use this after querying the Events table to drill into media mentions and sources.
+
+    ! This table is very large - ALWAYS use a WHERE clause !
     
     Args:
         where_clause: SQL WHERE clause without the WHERE keyword
@@ -318,6 +322,8 @@ def query_gkg(
     The GKG provides deeper semantic analysis of news content beyond just events. Each row represents 
     a processed news document with extracted knowledge. Use this for topic analysis, sentiment tracking,
     and entity extraction from global news.
+
+    ! This table is very large - ALWAYS use a WHERE clause !
     
     Args:
         where_clause: SQL WHERE clause without the WHERE keyword
@@ -389,6 +395,8 @@ def query_cloudvision(
     This table contains computer vision analysis powered by Google Cloud Vision API. Each row represents
     an image from news coverage with detailed visual analysis. Use this to understand visual narratives,
     detect objects/people in news imagery, or extract text from photos.
+
+    ! This table is very large - ALWAYS use a WHERE clause !
     
     Args:
         where_clause: SQL WHERE clause without the WHERE keyword
