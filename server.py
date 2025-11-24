@@ -1,9 +1,10 @@
 """GDELT 2.0 MCP Server - Provides access to GDELT BigQuery tables and CAMEO taxonomies."""
 
 import os
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Annotated, Literal
 from dotenv import load_dotenv
 from fastmcp import FastMCP
+from pydantic import Field
 
 from utils.auth import get_credentials_from_token, get_credentials_from_env
 from resources import (
@@ -162,10 +163,10 @@ def get_usage_guide() -> str:
 
 @mcp.tool(tags=["query"])
 def query_events(
-    where_clause: Optional[str] = None,
-    select_fields: str = "*",
-    limit: int = 100,
-    order_by: Optional[str] = None
+    where_clause: Annotated[Optional[str], Field(description='SQL WHERE clause without WHERE keyword. MUST include "SQLDATE >= YYYYMMDD"')] = None,
+    select_fields: Annotated[str, Field(description='Comma-separated field names')] = "*",
+    limit: Annotated[int, Field(description="Maximum rows to return (max: 10000)", ge=1, le=10000)] = 100,
+    order_by: Annotated[Optional[str], Field(description='ORDER BY clause without ORDER BY keyword (e.g., "SQLDATE DESC")')] = None
 ) -> List[Dict[str, Any]]:
     """
     Query the GDELT Events table for structured event data.
@@ -178,15 +179,6 @@ def query_events(
     impact measures (Goldstein scale), or specific event types via CAMEO codes.
     
     ⚠️ COST: ~$0.0002-0.001 per day WITH date filters. WITHOUT date filters can scan 50GB+ → $0.25+
-    
-    Args:
-        where_clause: SQL WHERE clause without WHERE keyword. MUST include "SQLDATE >= YYYYMMDD"
-        select_fields: Comma-separated field names (default: "*")
-        limit: Maximum rows to return (default: 100, max: 10000)
-        order_by: ORDER BY clause without ORDER BY keyword (e.g., "SQLDATE DESC")
-    
-    Returns:
-        List of dictionaries representing query results
     """
     credentials = get_credentials_from_token()
     if not credentials:
@@ -198,9 +190,9 @@ def query_events(
 
 @mcp.tool(tags=["query"])
 def query_eventmentions(
-    where_clause: Optional[str] = None,
-    select_fields: str = "*",
-    limit: int = 100
+    where_clause: Annotated[Optional[str], Field(description="SQL WHERE clause without WHERE keyword. Filter by GLOBALEVENTID from Events")] = None,
+    select_fields: Annotated[str, Field(description="Comma-separated field names")] = "*",
+    limit: Annotated[int, Field(description="Maximum rows to return (max: 10000)", ge=1, le=10000)] = 100
 ) -> List[Dict[str, Any]]:
     """
     Query the GDELT EventMentions table for media source information.
@@ -214,14 +206,6 @@ def query_eventmentions(
     
     ⚠️ COST: ~10x larger than Events. Query Events with date filters first, then filter by
     GLOBALEVENTID here. Without filters can scan 10GB+ → $0.05+
-    
-    Args:
-        where_clause: SQL WHERE clause without WHERE keyword. Filter by GLOBALEVENTID from Events
-        select_fields: Comma-separated field names (default: "*")
-        limit: Maximum rows to return (default: 100, max: 10000)
-    
-    Returns:
-        List of dictionaries representing query results
     """
     credentials = get_credentials_from_token()
     if not credentials:
@@ -233,9 +217,9 @@ def query_eventmentions(
 
 @mcp.tool(tags=["query"])
 def query_gkg(
-    where_clause: Optional[str] = None,
-    select_fields: str = "*",
-    limit: int = 100
+    where_clause: Annotated[Optional[str], Field(description='SQL WHERE clause without WHERE keyword. MUST include "DATE >= YYYYMMDDhhmmss"')] = None,
+    select_fields: Annotated[str, Field(description='Comma-separated field names (strongly recommend specific fields, not "*")')] = "*",
+    limit: Annotated[int, Field(description="Maximum rows to return (max: 10000)", ge=1, le=10000)] = 100
 ) -> List[Dict[str, Any]]:
     """
     Query the GDELT GKG (Global Knowledge Graph) table for semantic content.
@@ -250,14 +234,6 @@ def query_gkg(
     
     🚨 CRITICAL: GKG is the MOST EXPENSIVE table. WITH date filter ~$0.025/day. WITHOUT date
     filter can scan 2.5TB+ → $12.50+. STRONGLY use materialization for analysis.
-    
-    Args:
-        where_clause: SQL WHERE clause without WHERE keyword. MUST include "DATE >= YYYYMMDDhhmmss"
-        select_fields: Comma-separated field names (strongly recommend specific fields, not "*")
-        limit: Maximum rows to return (default: 100, max: 10000)
-    
-    Returns:
-        List of dictionaries representing query results
     """
     credentials = get_credentials_from_token()
     if not credentials:
@@ -269,9 +245,9 @@ def query_gkg(
 
 @mcp.tool(tags=["query"])
 def query_cloudvision(
-    where_clause: Optional[str] = None,
-    select_fields: str = "*",
-    limit: int = 100
+    where_clause: Annotated[Optional[str], Field(description="SQL WHERE clause without WHERE keyword. Include timestamp >= YYYYMMDDhhmmss")] = None,
+    select_fields: Annotated[str, Field(description="Comma-separated field names")] = "*",
+    limit: Annotated[int, Field(description="Maximum rows to return (max: 10000)", ge=1, le=10000)] = 100
 ) -> List[Dict[str, Any]]:
     """
     Query the GDELT CloudVision table for visual analysis of news images.
@@ -285,14 +261,6 @@ def query_cloudvision(
     
     ⚠️ COST: Can be large depending on coverage. Include timestamp filters. Without filters
     can scan 5GB+ → $0.025+
-    
-    Args:
-        where_clause: SQL WHERE clause without WHERE keyword. Include timestamp >= YYYYMMDDhhmmss
-        select_fields: Comma-separated field names (default: "*")
-        limit: Maximum rows to return (default: 100, max: 10000)
-    
-    Returns:
-        List of dictionaries representing query results
     """
     credentials = get_credentials_from_token()
     if not credentials:
@@ -308,27 +276,18 @@ def query_cloudvision(
 
 @mcp.tool(tags=["cost"])
 def estimate_query_cost(
-    table: str,
-    where_clause: Optional[str] = None,
-    select_fields: str = "*"
+    table: Annotated[Literal["events", "eventmentions", "gkg", "cloudvision"], Field(description="Table name")],
+    where_clause: Annotated[Optional[str], Field(description="Optional WHERE clause without WHERE keyword")] = None,
+    select_fields: Annotated[str, Field(description='Field names to select')] = "*"
 ) -> Dict[str, Any]:
     """
-    Estimate query cost before executing (dry-run only, no actual query).
+    Use this tool to estimate query cost before executing (dry-run only, no actual query).
     
-    Use this tool to check the cost before running a query on large tables. Performs a BigQuery
-    dry-run that estimates bytes scanned without executing. Always use this for exploratory
-    queries on GKG or EventMentions to verify date filters are effective and avoid accidents.
+    Performs a BigQuery dry-run that calculates bytes to be scanned without running the query.
+    Always use this before exploratory queries on GKG or EventMentions to verify date filters
+    are working and avoid accidentally expensive operations.
     
-    Use when you need: cost verification before running queries, to check if date filters are
-    working, or to get warnings about expensive operations.
-    
-    Args:
-        table: Table name - "events", "eventmentions", "gkg", or "cloudvision"
-        where_clause: Optional WHERE clause without WHERE keyword
-        select_fields: Field names to select (default: "*")
-    
-    Returns:
-        Dictionary with bytes_processed, gb_processed, and estimated_cost_usd
+    Returns: Dictionary with bytes_processed, gb_processed, and estimated_cost_usd
     """
     credentials = get_credentials_from_token()
     if not credentials:
@@ -340,33 +299,21 @@ def estimate_query_cost(
 
 @mcp.tool(tags=["cost"])
 def create_materialized_subset(
-    source_table: str,
-    subset_name: str,
-    where_clause: str,
-    select_fields: str = "*",
-    description: Optional[str] = None,
-    expiration_hours: int = 48
+    source_table: Annotated[Literal["events", "eventmentions", "gkg", "cloudvision"], Field(description="Source table name")],
+    subset_name: Annotated[str, Field(description='Subset name (alphanumeric and underscores only, e.g., "ukraine_jan2025")')],
+    where_clause: Annotated[str, Field(description="WHERE clause to filter data. MUST include date filters for cost-effectiveness")],
+    select_fields: Annotated[str, Field(description='Fields to select (consider selecting only needed fields)')] = "*",
+    description: Annotated[Optional[str], Field(description="Optional description for documentation")] = None,
+    expiration_hours: Annotated[int, Field(description="Hours until auto-deletion", ge=1)] = 48
 ) -> Dict[str, Any]:
     """
-    Create a materialized subset for cost-effective iterative analysis.
+    Use this tool to create a filtered subset that enables 50-100x faster and cheaper querying.
     
-    RECOMMENDED WORKFLOW: Create subset once with tight date filters, then query it multiple times
-    for near-free iteration. This is 50-100x cheaper than querying GDELT directly multiple times.
-    Subsets auto-expire after 48 hours to prevent storage costs.
+    Creates a materialized table with filtered GDELT data. One-time filtering cost (~$0.001-0.01),
+    then query the small table repeatedly for near-free (~$0.00001 per query). Subsets auto-expire
+    after 48 hours to prevent storage costs.
     
-    Use when you need: iterative data exploration, multi-step analysis, to share filtered data,
-    or to avoid repeated expensive queries.
-    
-    Args:
-        source_table: Source - "events", "eventmentions", "gkg", or "cloudvision"
-        subset_name: Subset name (alphanumeric and underscores only, e.g., "ukraine_jan2025")
-        where_clause: WHERE clause to filter data. MUST include date filters for cost-effectiveness
-        select_fields: Fields to select (default: "*", but consider selecting only needed fields)
-        description: Optional description for documentation
-        expiration_hours: Hours until auto-deletion (default: 48)
-    
-    Returns:
-        Dictionary with creation status, cost estimate, rows created, and expiration info
+    Returns: Dictionary with creation status, cost estimate, row count, subset location, and expiration time
     """
     credentials = get_credentials_from_token()
     if not credentials:
@@ -381,14 +328,13 @@ def create_materialized_subset(
 @mcp.tool(tags=["cost"])
 def list_materialized_subsets() -> List[Dict[str, Any]]:
     """
-    List all materialized subset tables with metadata.
+    Use this tool to see all available materialized subsets with their metadata.
     
-    Use this tool to see available subsets, check expiration status, monitor storage usage, or
-    find subsets that need extension or cleanup. Shows name, size, row count, expiration status,
-    and description for each subset.
+    Call this FIRST before creating a new subset - someone may have already created one that
+    covers your needs. Also use to check expiration status, monitor storage, or find subsets
+    needing extension/cleanup.
     
-    Returns:
-        List of dictionaries with subset metadata
+    Returns: List of subsets with name, size, row count, creation/expiration time, and description
     """
     credentials = get_credentials_from_token()
     if not credentials:
@@ -400,29 +346,19 @@ def list_materialized_subsets() -> List[Dict[str, Any]]:
 
 @mcp.tool(tags=["cost"])
 def query_materialized_subset(
-    subset_name: str,
-    where_clause: Optional[str] = None,
-    select_fields: str = "*",
-    limit: int = 1000
+    subset_name: Annotated[str, Field(description="Subset name (from list_materialized_subsets)")],
+    where_clause: Annotated[Optional[str], Field(description="Optional additional WHERE clause for further filtering")] = None,
+    select_fields: Annotated[str, Field(description="Fields to select")] = "*",
+    limit: Annotated[int, Field(description="Maximum rows to return (max: 10000)", ge=1, le=10000)] = 1000
 ) -> List[Dict[str, Any]]:
     """
-    Query a materialized subset (near-free operation).
+    Use this tool to query a materialized subset (near-free operation, ~$0.00001 per query).
     
-    This is step 2 in the cost-optimization workflow. After creating a subset once (~$0.001-0.01),
-    query it many times (~$0.00001 each). Enables fast iteration, cheap analysis on filtered data,
-    and quick prototyping without re-filtering the full GDELT tables.
+    After creating a subset once, query it many times without worrying about cost. This enables
+    fast iteration and experimentation on filtered GDELT data without re-scanning the massive
+    source tables.
     
-    Use when you need: to iterate on analysis, run multiple analyses on same filtered data, or
-    test queries quickly without cost concerns.
-    
-    Args:
-        subset_name: Subset name (from list_materialized_subsets)
-        where_clause: Optional additional WHERE clause for further filtering
-        select_fields: Fields to select (default: "*")
-        limit: Maximum rows to return (default: 1000, max: 10000)
-    
-    Returns:
-        List of dictionaries representing query results
+    Returns: List of rows matching the query, each row as a dictionary of field-value pairs
     """
     credentials = get_credentials_from_token()
     if not credentials:
@@ -434,22 +370,17 @@ def query_materialized_subset(
 
 @mcp.tool(tags=["cost"])
 def extend_subset_expiration(
-    subset_name: str,
-    additional_hours: int = 48
+    subset_name: Annotated[str, Field(description="Name of the subset to extend")],
+    additional_hours: Annotated[int, Field(description="Hours to add to expiration", ge=1)] = 48
 ) -> Dict[str, Any]:
     """
-    Extend the expiration time of a materialized subset.
+    Use this tool to extend a subset's expiration time, keeping it available longer.
     
-    Use this tool when analysis takes longer than expected, you want to share the subset with
-    team members, or a long-running project needs persistent data. By default, subsets auto-expire
-    after 48 hours to prevent storage costs.
+    By default, subsets auto-expire after 48 hours to prevent storage costs. Use this when
+    analysis takes longer than expected, you want to share with others, or need persistent
+    data for a long-running project.
     
-    Args:
-        subset_name: Name of the subset to extend
-        additional_hours: Hours to add to expiration (default: 48)
-    
-    Returns:
-        Dictionary with update status and new expiration time
+    Returns: Dictionary with update status and new expiration time
     """
     credentials = get_credentials_from_token()
     if not credentials:
@@ -460,19 +391,17 @@ def extend_subset_expiration(
 
 
 @mcp.tool(tags=["cost"])
-def delete_materialized_subset(subset_name: str) -> Dict[str, Any]:
+def delete_materialized_subset(
+    subset_name: Annotated[str, Field(description="Name of the subset to delete")]
+) -> Dict[str, Any]:
     """
-    Delete a materialized subset table (manual cleanup).
+    Use this tool to manually delete a materialized subset table.
     
-    Use this tool when analysis is complete and the subset is no longer needed, you want to free
-    storage quota, or need to recreate a subset with different parameters. Subsets auto-expire
-    after 48 hours by default, but you can delete earlier.
+    Use when analysis is complete and you no longer need the subset, want to free storage quota,
+    or need to recreate it with different parameters. Subsets auto-expire after 48 hours, so
+    manual deletion is optional.
     
-    Args:
-        subset_name: Name of the subset to delete
-    
-    Returns:
-        Dictionary with deletion status
+    Returns: Dictionary with deletion status
     """
     credentials = get_credentials_from_token()
     if not credentials:
@@ -488,8 +417,8 @@ def delete_materialized_subset(subset_name: str) -> Dict[str, Any]:
 
 @mcp.tool(tags=["cameo"])
 def get_cameo_event_codes(
-    category: Optional[str] = None,
-    search_keyword: Optional[str] = None
+    category: Annotated[Optional[str], Field(description='Optional two-digit category code to filter by (e.g., "01", "19")')] = None,
+    search_keyword: Annotated[Optional[str], Field(description='Optional keyword to search in event descriptions (e.g., "protest")')] = None
 ) -> Dict[str, Any]:
     """
     Get CAMEO event code taxonomy for understanding event types.
@@ -501,19 +430,14 @@ def get_cameo_event_codes(
     CAMEO codes are hierarchical: root codes (e.g., "19") represent broad categories, specific
     codes (e.g., "193") represent detailed types. Always use this before querying events to
     ensure correct codes.
-    
-    Args:
-        category: Optional two-digit category code to filter by (e.g., "01", "19")
-        search_keyword: Optional keyword to search in event descriptions (e.g., "protest")
-    
-    Returns:
-        Dictionary of event codes and descriptions
     """
     return get_cameo_event_codes_impl(category, search_keyword)
 
 
 @mcp.tool(tags=["cameo"])
-def get_cameo_actor_codes(code_type: str = "all") -> Dict[str, Any]:
+def get_cameo_actor_codes(
+    code_type: Annotated[Literal["countries", "types", "all"], Field(description="Type of codes to retrieve")] = "all"
+) -> Dict[str, Any]:
     """
     Get CAMEO actor code taxonomy for understanding actors in events.
     
@@ -524,12 +448,6 @@ def get_cameo_actor_codes(code_type: str = "all") -> Dict[str, Any]:
     Actor codes identify WHO is involved in events. Country codes identify national actors, type
     codes classify the kind of actor (government, military, rebel, media, etc.). Use this reference
     before filtering by Actor1CountryCode, Actor2CountryCode, or actor types.
-    
-    Args:
-        code_type: Type of codes - "countries", "types", or "all" (default: "all")
-    
-    Returns:
-        Dictionary of actor codes and descriptions
     """
     return get_cameo_actor_codes_impl(code_type)
 

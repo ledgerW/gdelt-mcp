@@ -15,6 +15,22 @@ GDELT is petabyte-scale. Poorly-formed queries cost $1-50+. Follow the workflow 
 
 **Default to this for ALL GDELT tasks.** Key insight: users always have follow-up questions. Materialized subsets enable 50-100x cheaper iteration.
 
+### STEP 0: Understand the Data
+
+**Before querying, review:**
+
+1. **Table Schemas** - Know available fields and structure:
+   - `get_events_schema`: Events table fields and types
+   - `get_gkg_schema`: GKG table fields and types
+   - `get_eventmentions_schema`: EventMentions fields
+   - `get_cloudvision_schema`: CloudVision fields
+
+2. **CAMEO Codes** - Understand event types and actors:
+   - `get_cameo_event_codes`: Event type taxonomy (e.g., EventRootCode='14' for protests)
+   - `get_cameo_actor_codes`: Actor classifications (country codes, actor types)
+
+**Why:** You need to know field names to select them and CAMEO codes to filter correctly.
+
 ### STEP 1: Check Existing Subsets
 
 **Tool:** `list_materialized_subsets`
