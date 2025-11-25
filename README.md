@@ -63,11 +63,173 @@ token = f"{project_id}|{private_key}|{client_email}"
 client = Client("https://your-server/mcp", auth=BearerAuth(token=token))
 ```
 
-**Security Best Practices:**
-- Store tokens in environment variables or secure vaults
-- Never commit tokens to version control
-- Rotate service account keys regularly
-- Use least-privilege IAM roles
+
+### LangChain Agent with Remote Server
+
+Create a LangChain agent that uses the usage guide in its system prompt and organizes tools by their tags:
+
+```python
+from langchain_mcp_adapters.client import MultiServerMCPClient
+from langchain.agents import create_agent
+import httpx
+
+async def create_gdelt_agent():
+    """Create a LangChain agent with GDELT tools organized by category."""
+    
+    # Bearer token format: project_id|private_key|client_email
+    token = f"{project_id}|{private_key}|{client_email}"
+    
+    # Initialize MultiServerMCPClient with remote server
+    client = MultiServerMCPClient({
+        "gdelt": {
+            "transport": "streamable_http",
+            "url": "https://your-server/mcp",
+            "auth": httpx.BasicAuth(username="", password=token),
+        }
+    })
+    
+    # Get usage guide resource
+    usage_guide_blobs = await client.get_resources(
+        "gdelt",
+        uris="gdelt://guide/usage"
+    )
+    usage_guide = usage_guide_blobs[0].as_string()
+    
+    # Get LangChain tools (these include metadata with tags)
+    tools = await client.get_tools(server_name="gdelt")
+    
+    # Group tools by FastMCP tags
+    def group_tools_by_tag(tools):
+        categories = {
+            'schema': [],
+            'query': [],
+            'cost': [],
+            'cameo': [],
+            'guide': []
+        }
+        for tool in tools:
+            # Extract tags from LangChain tool metadata
+            if hasattr(tool, 'metadata') and tool.metadata:
+                tags = tool.metadata.get('tags', [])
+                for tag in tags:
+                    if tag in categories:
+                        categories[tag].append(tool.name)
+        return categories
+    
+    tool_categories = group_tools_by_tag(tools)
+    
+    # Format categorized tool list for system prompt
+    tools_by_category = "\n\n".join([
+        f"**{category.upper()} TOOLS**:\n" + 
+        "\n".join([f"- {tool}" for tool in tools])
+        for category, tools in tool_categories.items()
+        if tools
+    ])
+    
+    # Build comprehensive system prompt
+    system_prompt = f"""You are a GDELT data analysis assistant with access to the complete GDELT 2.0 dataset via BigQuery.
+
+IMPORTANT USAGE GUIDE:
+{usage_guide}
+
+AVAILABLE TOOLS BY CATEGORY:
+{tools_by_category}
+
+Follow the recommended workflow from the usage guide above. Always:
+1. Check existing materialized subsets first (list_materialized_subsets)
+2. Create materialized subsets for iterative analysis (create_materialized_subset)
+3. Use appropriate date filters in all queries
+4. Start with Events table (smallest) before querying larger tables"""
+    
+    # Create agent with gpt-5.1
+    agent = create_agent(
+        "openai:gpt-5.1",
+        tools,
+        system_prompt=system_prompt
+    )
+    
+    return agent
+
+# Use the agent
+agent = await create_gdelt_agent()
+result = await agent.ainvoke({
+    "messages": "Analyze protests in the United States during the first week of January 2025"
+})
+print(result)
+```
+
+**Key Features:**
+
+- **Remote server with authentication**: Uses bearer token auth (project_id|private_key|client_email)
+- **Usage guide integration**: Fetches and includes the usage guide in system prompt
+- **Tag-based tool grouping**: Organizes tools by category (schema, query, cost, cameo, guide)
+- **Comprehensive system prompt**: Integrates best practices and tool categories
+- **GPT-5.1 model**: Latest OpenAI model for optimal performance
+
+### MCP Client with Remote Server
+
+Connect to the server using MCP's client API to access tools and resources directly:
+
+```python
+from mcp import Client
+import httpx
+
+# Bearer token format: project_id|private_key|client_email
+token = f"{project_id}|{private_key}|{client_email}"
+server_url = "https://gdelt-mcp.fastmcp.app/mcp"
+auth = httpx.BasicAuth(username="", password=token)
+
+client = Client(server_url, auth=auth)
+
+async with client:
+    # Get usage guide resource
+    usage_guide = await client.read_resource("gdelt://guide/usage")
+    print(f"Usage guide: {usage_guide[:200]}...")
+    
+    # List all tools
+    tools = await client.list_tools()
+    print(f"Available tools: {[t.name for t in tools]}")
+    
+    # Filter tools by tag
+    schema_tools = [
+        tool for tool in tools 
+        if hasattr(tool, 'meta') and tool.meta and
+           tool.meta.get('_fastmcp', {}) and
+           'schema' in tool.meta.get('_fastmcp', {}).get('tags', [])
+    ]
+    
+    query_tools = [
+        tool for tool in tools 
+        if hasattr(tool, 'meta') and tool.meta and
+           tool.meta.get('_fastmcp', {}) and
+           'query' in tool.meta.get('_fastmcp', {}).get('tags', [])
+    ]
+    
+    cost_tools = [
+        tool for tool in tools 
+        if hasattr(tool, 'meta') and tool.meta and
+           tool.meta.get('_fastmcp', {}) and
+           'cost' in tool.meta.get('_fastmcp', {}).get('tags', [])
+    ]
+    
+    print(f"Found {len(schema_tools)} schema tools")
+    print(f"Found {len(query_tools)} query tools")
+    print(f"Found {len(cost_tools)} cost optimization tools")
+```
+
+**Key Features:**
+
+- **Remote server with authentication**: Uses bearer token auth
+- **Direct resource access**: Read usage guides and schemas
+- **Tool listing and filtering**: Filter tools by FastMCP tags
+- **Simple API**: Straightforward client interface for tool discovery
+
+**Available Tool Tags:**
+- `schema`: Schema documentation tools
+- `query`: Direct query tools (events, eventmentions, gkg, cloudvision)
+- `cost`: Cost optimization tools (estimate, materialize, list, query subsets)
+- `cameo`: CAMEO taxonomy lookup tools
+- `guide`: Usage guide and best practices
 
 ## MCP Resources
 
@@ -77,7 +239,7 @@ Schema documentation and best practices:
 - `gdelt://eventmentions/schema` - Media mentions and sources
 - `gdelt://gkg/schema` - Global Knowledge Graph (themes, entities)
 - `gdelt://cloudvision/schema` - Visual analysis of news images
-- `gdelt://best-practices/cost-optimization` - **Cost-effective querying guide** 🚨
+- `gdelt://guide/usage` - **Cost-effective querying guide** 🚨
 
 ## MCP Tools
 
@@ -116,12 +278,6 @@ Schema documentation and best practices:
 **`query_materialized_subset`** - Query subsets (near-free!)
 - ~$0.00001 per query vs $0.01+ on full tables
 - Perfect for iterative analysis
-
-**`extend_subset_expiration`** - Keep subset longer than 48 hours
-- Extend expiration when needed
-
-**`delete_materialized_subset`** - Manual cleanup
-- Delete before auto-expiration if done early
 
 ### CAMEO Taxonomy Tools
 
@@ -166,7 +322,7 @@ query_materialized_subset(
 - Materialized workflow: $0.01 + 3 × $0.00001 = **$0.01**
 - **Savings: 66%** (scales with more queries!)
 
-📖 **Read the `gdelt://best-practices/cost-optimization` resource for complete guidance.**
+📖 **Read the `gdelt://guide/usage` resource for complete guidance.**
 
 ## Example Queries
 
